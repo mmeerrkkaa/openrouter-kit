@@ -65,7 +65,7 @@ async function main() {
         model: 'google/gemini-2.0-flash-001',
         prompt: 'Расскажи короткую шутку про программистов.'
     });
-    console.log('Шутка от Haiku:', haikuResponse);
+    console.log(haikuResponse);
 
   } catch (error: any) {
     console.error(`Произошла ошибка [${error.code || 'UNKNOWN'}]: ${error.message}`);

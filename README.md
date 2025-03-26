@@ -66,7 +66,7 @@ async function main() {
         model: 'google/gemini-2.0-flash-001',
         prompt: 'Tell me a short joke about programmers.'
     });
-    console.log('Joke from Haiku:', haikuResponse);
+    console.log(haikuResponse);
 
   } catch (error: any) {
     console.error(`An error occurred [${error.code || 'UNKNOWN'}]: ${error.message}`);
