@@ -1,6 +1,6 @@
 // Path: utils/formatting.ts
 /**
- * Formatting utilities for the OpenRouter Client library.
+ * Formatting utilities for the OpenRouter Kit library.
  */
 
 import { Message } from '../types';

@@ -1,6 +1,6 @@
 // Path: security/index.ts
 /**
- * Security module for the OpenRouter Client Library.
+ * Security module for the OpenRouter Kit Library.
  * Exports all components of the security system.
  */
 

@@ -1,6 +1,6 @@
 // Path: index.ts
 /**
- * OpenRouter Client Library - Main Export File
+ * OpenRouter Kit Library - Main Export File
  *
  * This library provides a TypeScript/JavaScript client for easy interaction
  * with the OpenRouter API (https://openrouter.ai/), including:

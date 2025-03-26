@@ -1,6 +1,6 @@
 // Path: config.ts
 /**
- * Default configuration constants for OpenRouter Client.
+ * Default configuration constants for OpenRouter Kit.
  */
 
 /**

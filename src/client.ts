@@ -99,7 +99,7 @@ export class OpenRouterClient {
   private axiosConfig?: AxiosRequestConfig;
 
   /**
-   * Creates an OpenRouter client instance.
+   * Creates an OpenRouter Kit instance.
    *
    * @param config - Client configuration.
    * @param config.apiKey - Your OpenRouter API key (required).
@@ -131,7 +131,7 @@ export class OpenRouterClient {
     jsonUtils.setJsonUtilsLogger(this.logger.withPrefix('JsonUtils'));
     this.clientEventEmitter = new SimpleEventEmitter();
 
-    this.logger.log('Initializing OpenRouter client...');
+    this.logger.log('Initializing OpenRouter Kit...');
 
     this.apiKey = config.apiKey;
     this.apiEndpoint = config.apiEndpoint || API_ENDPOINT;
@@ -227,7 +227,7 @@ export class OpenRouterClient {
     // Create Axios instance AFTER initializing all fields used in interceptors
     this.axiosInstance = this._createAxiosInstance();
 
-    this.logger.log('OpenRouter client successfully initialized.');
+    this.logger.log('OpenRouter Kit successfully initialized.');
   }
 
   /**

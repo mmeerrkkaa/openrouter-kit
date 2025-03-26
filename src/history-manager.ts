@@ -1,6 +1,6 @@
 // Path: history-manager.ts
 /**
- * Dialog history manager for OpenRouter Client.
+ * Dialog history manager for OpenRouter Kit.
  * Allows storing history in memory or on disk, automatically truncates it
  * to a specified size and cleans up expired entries by TTL.
  */

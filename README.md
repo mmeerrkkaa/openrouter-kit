@@ -2,7 +2,7 @@
 [🇷🇺 Русский](./README.ru.md) | **🇬🇧 English**
 ---
 
-# OpenRouter Client Library
+# OpenRouter Kit
 
 [![npm version](https://badge.fury.io/js/openrouter-kit.svg)](https://badge.fury.io/js/openrouter-kit) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 

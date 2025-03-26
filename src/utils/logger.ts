@@ -1,6 +1,6 @@
 // Path: utils/logger.ts
 /**
- * Unified logger for OpenRouter Client library.
+ * Unified logger for OpenRouter Kit library.
  * Allows outputting messages to console depending on debug mode (`debugMode`).
  * Supports prefixes to identify message source.
  */

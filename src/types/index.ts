@@ -1,6 +1,6 @@
 // Path: types/index.ts
 /**
- * Core data types and interfaces for the OpenRouter Client library.
+ * Core data types and interfaces for the OpenRouter Kit library.
  */
 
 import type { AxiosRequestConfig } from 'axios';
