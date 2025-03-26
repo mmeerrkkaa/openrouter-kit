@@ -5,7 +5,7 @@
  * calling tools, and configuring security.
  *
  * @example
- * import { OpenRouterClient } from 'openrouter-client'; // or your path
+ * import { OpenRouterClient } from 'openrouter-kit'; // or your path
  *
  * const client = new OpenRouterClient({
  *   apiKey: 'YOUR_OPENROUTER_API_KEY',
@@ -74,8 +74,8 @@ import {
 import { SecurityManager } from './security/security-manager';
 import { SimpleEventEmitter } from './utils/simple-event-emitter';
 
-const DEFAULT_REFERER_URL = "https://github.com/mmeerrkkaa/openrouter-client";
-const DEFAULT_X_TITLE = "openrouter-client";
+const DEFAULT_REFERER_URL = "https://github.com/mmeerrkkaa/openrouter-kit";
+const DEFAULT_X_TITLE = "openrouter-kit";
 
 export class OpenRouterClient {
   private apiKey: string;

@@ -13,7 +13,7 @@
  *
  * @example Basic usage:
  * ```typescript
- * import OpenRouter from 'openrouter-client'; // or './index'
+ * import OpenRouter from 'openrouter-kit'; // or './index'
  *
  * const client = new OpenRouter({ apiKey: 'YOUR_OPENROUTER_KEY' });
  *
@@ -26,7 +26,7 @@
  *
  * @example Using with history:
  * ```typescript
- * import OpenRouter from 'openrouter-client';
+ * import OpenRouter from 'openrouter-kit';
  *
  * const client = new OpenRouter({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
  * const userId = 'user-123';
@@ -55,7 +55,7 @@ export { SecurityManager } from './security'; // Export SecurityManager from sec
  * Security module. Contains SecurityManager, AuthManager, AccessControlManager, etc.,
  * as well as security-specific types and interfaces.
  * @example
- * import { security } from 'openrouter-client';
+ * import { security } from 'openrouter-kit';
  * const customChecker = new security.AccessControlManager(...);
  */
 export * as security from './security';
@@ -64,7 +64,7 @@ export * as security from './security';
  * Utilities module. Contains error classes, formatting functions, validation,
  * logging, and JSON utilities.
  * @example
- * import { utils } from 'openrouter-client';
+ * import { utils } from 'openrouter-kit';
  * const logger = new utils.Logger(true);
  * try {
  *   utils.jsonUtils.parseOrThrow('{invalid}');
@@ -81,7 +81,7 @@ export * as utils from './utils';
  * Object containing default configuration constants
  * (API_ENDPOINT, DEFAULT_MODEL, DEFAULT_TIMEOUT, etc.).
  * @example
- * import { config } from 'openrouter-client';
+ * import { config } from 'openrouter-kit';
  * console.log(`Default model: ${config.DEFAULT_MODEL}`);
  */
 export * as config from './config';
@@ -100,7 +100,7 @@ export * from './utils/error';
  * Static `ToolHandler` class for helper operations with tools
  * (e.g., formatting for API). Main processing logic is called within `client.chat`.
  * @example
- * import { ToolHandler } from 'openrouter-client';
+ * import { ToolHandler } from 'openrouter-kit';
  * const apiReadyTool = ToolHandler.formatToolForAPI({ name: 'myTool', ... });
  */
 export { ToolHandler } from './tool-handler';
@@ -109,7 +109,7 @@ export { ToolHandler } from './tool-handler';
 /**
  * Export main `OpenRouterClient` class as default for convenience.
  * @example
- * import OpenRouter from 'openrouter-client';
+ * import OpenRouter from 'openrouter-kit';
  * const client = new OpenRouter({ apiKey: '...' });
  */
 import { OpenRouterClient } from './client';

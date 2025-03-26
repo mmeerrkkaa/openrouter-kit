@@ -3,7 +3,7 @@
 
 # OpenRouter Client Library
 
-[![npm version](https://badge.fury.io/js/openrouter-client.svg)](https://badge.fury.io/js/openrouter-client) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![npm version](https://badge.fury.io/js/openrouter-kit.svg)](https://badge.fury.io/js/openrouter-kit) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Удобный TypeScript/JavaScript клиент для взаимодействия с [OpenRouter API](https://openrouter.ai/), предоставляющий:
 
@@ -38,15 +38,15 @@
 ## 📦 Установка
 
 ```bash
-npm install openrouter-client
+npm install openrouter-kit
 # или
-yarn add openrouter-client
+yarn add openrouter-kit
 ```
 
 ## ✨ Базовое использование
 
 ```typescript
-import OpenRouter from 'openrouter-client'; // Используем экспорт по умолчанию
+import OpenRouter from 'openrouter-kit'; // Используем экспорт по умолчанию
 
 // Инициализация клиента с вашим API ключом
 const client = new OpenRouter({
@@ -145,7 +145,7 @@ main();
 **Пример использования истории:**
 
 ```typescript
-import OpenRouter from 'openrouter-client';
+import OpenRouter from 'openrouter-kit';
 
 const client = new OpenRouter({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
 const userId = 'user-abc';
@@ -181,7 +181,7 @@ runConversation();
 Инструменты определяются как объекты, соответствующие интерфейсу `Tool`, и передаются в `client.chat()` через опцию `tools`.
 
 ```typescript
-import { Tool, ToolContext } from 'openrouter-client'; // Импортируем типы
+import { Tool, ToolContext } from 'openrouter-kit'; // Импортируем типы
 
 // Пример функции для получения погоды
 async function getCurrentWeather(location: string, unit: 'celsius' | 'fahrenheit' = 'celsius'): Promise<object> {
@@ -276,8 +276,8 @@ askAboutWeather();
 **Конфигурация (`SecurityConfig`)**:
 
 ```typescript
-import OpenRouter from 'openrouter-client';
-import type { SecurityConfig } from 'openrouter-client/security'; // Импорт типа
+import OpenRouter from 'openrouter-kit';
+import type { SecurityConfig } from 'openrouter-kit/security'; // Импорт типа
 
 const jwtSecret = process.env.JWT_SECRET || 'default-secret-replace-in-production'; // ВАЖНО: Замените на надежный секрет!
 
@@ -450,7 +450,7 @@ getStructuredData();
 Вы можете ловить конкретные типы ошибок или использовать поле `code` (например, `error.code === ErrorCode.RATE_LIMIT_ERROR`).
 
 ```typescript
-import { RateLimitError, ValidationError, ErrorCode } from 'openrouter-client';
+import { RateLimitError, ValidationError, ErrorCode } from 'openrouter-kit';
 
 // ...
 try {

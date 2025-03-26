@@ -4,7 +4,7 @@
 
 # OpenRouter Client Library
 
-[![npm version](https://badge.fury.io/js/openrouter-client.svg)](https://badge.fury.io/js/openrouter-client) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![npm version](https://badge.fury.io/js/openrouter-kit.svg)](https://badge.fury.io/js/openrouter-kit) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A convenient TypeScript/JavaScript client for interacting with the [OpenRouter API](https://openrouter.ai/), providing:
 
@@ -39,15 +39,15 @@ A convenient TypeScript/JavaScript client for interacting with the [OpenRouter A
 ## 📦 Installation
 
 ```bash
-npm install openrouter-client
+npm install openrouter-kit
 # or
-yarn add openrouter-client
+yarn add openrouter-kit
 ```
 
 ## ✨ Basic Usage
 
 ```typescript
-import OpenRouter from 'openrouter-client'; // Using the default export
+import OpenRouter from 'openrouter-kit'; // Using the default export
 
 // Initialize the client with your API key
 const client = new OpenRouter({
@@ -146,7 +146,7 @@ The library automatically manages conversation history if `user` (and optionally
 **History Usage Example:**
 
 ```typescript
-import OpenRouter from 'openrouter-client';
+import OpenRouter from 'openrouter-kit';
 
 const client = new OpenRouter({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
 const userId = 'user-abc';
@@ -182,7 +182,7 @@ Models can request to call your functions (tools) to get external information or
 Tools are defined as objects matching the `Tool` interface and passed to `client.chat()` via the `tools` option.
 
 ```typescript
-import { Tool, ToolContext } from 'openrouter-client'; // Import types
+import { Tool, ToolContext } from 'openrouter-kit'; // Import types
 
 // Example weather fetching function
 async function getCurrentWeather(location: string, unit: 'celsius' | 'fahrenheit' = 'celsius'): Promise<object> {
@@ -277,8 +277,8 @@ Provides comprehensive protection when working with tools and user authenticatio
 **Configuration (`SecurityConfig`)**:
 
 ```typescript
-import OpenRouter from 'openrouter-client';
-import type { SecurityConfig } from 'openrouter-client/security'; // Import type
+import OpenRouter from 'openrouter-kit';
+import type { SecurityConfig } from 'openrouter-kit/security'; // Import type
 
 const jwtSecret = process.env.JWT_SECRET || 'default-secret-replace-in-production'; // IMPORTANT: Replace with a strong secret!
 
@@ -451,7 +451,7 @@ The library uses custom error classes inheriting from `OpenRouterError`. This al
 You can catch specific error types or use the `code` field (e.g., `error.code === ErrorCode.RATE_LIMIT_ERROR`).
 
 ```typescript
-import { RateLimitError, ValidationError, ErrorCode } from 'openrouter-client';
+import { RateLimitError, ValidationError, ErrorCode } from 'openrouter-kit';
 
 // ...
 try {
