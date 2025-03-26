@@ -63,7 +63,7 @@ async function main() {
 
     // Example specifying a model
     const haikuResponse = await client.chat({
-        model: 'anthropic/claude-3-haiku-20240307',
+        model: 'google/gemini-2.0-flash-001',
         prompt: 'Tell me a short joke about programmers.'
     });
     console.log('Joke from Haiku:', haikuResponse);
@@ -92,7 +92,7 @@ The main class for interacting with the API.
 When creating an `OpenRouterClient` instance, you pass a configuration object with the following key fields:
 
 *   `apiKey` (string, **required**): Your OpenRouter API key.
-*   `model` (string, optional): Default model for requests (default: `anthropic/claude-3-haiku-20240307`).
+*   `model` (string, optional): Default model for requests (default: `google/gemini-2.0-flash-001`).
 *   `debug` (boolean, optional): Enable detailed logging (default: `false`).
 *   `historyStorage` ('memory' | 'disk', optional): History storage type (default: `memory`).
 *   `historyAutoSave` (boolean, optional): Automatically save history on exit for `disk` (default: `false`).

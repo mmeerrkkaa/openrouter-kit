@@ -62,7 +62,7 @@ async function main() {
 
     // Пример с указанием модели
     const haikuResponse = await client.chat({
-        model: 'anthropic/claude-3-haiku-20240307',
+        model: 'google/gemini-2.0-flash-001',
         prompt: 'Расскажи короткую шутку про программистов.'
     });
     console.log('Шутка от Haiku:', haikuResponse);
@@ -91,7 +91,7 @@ main();
 При создании экземпляра `OpenRouterClient` передается объект конфигурации со следующими ключевыми полями:
 
 *   `apiKey` (string, **обязательно**): Ваш API ключ OpenRouter.
-*   `model` (string, опционально): Модель по умолчанию для запросов (по умолчанию: `anthropic/claude-3-haiku-20240307`).
+*   `model` (string, опционально): Модель по умолчанию для запросов (по умолчанию: `google/gemini-2.0-flash-001`).
 *   `debug` (boolean, опционально): Включить подробное логирование (по умолчанию: `false`).
 *   `historyStorage` ('memory' | 'disk', опционально): Тип хранилища истории (по умолчанию: `memory`).
 *   `historyAutoSave` (boolean, опционально): Автоматически сохранять историю при выходе для `disk` (по умолчанию: `false`).

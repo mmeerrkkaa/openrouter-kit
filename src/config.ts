@@ -14,7 +14,7 @@ export const API_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
  * Recommended to use a current, fast, and inexpensive model for general tasks.
  * Updated: Using recommended Haiku model as of 2024-03.
  */
-export const DEFAULT_MODEL = "anthropic/claude-3-haiku-20240307";
+export const DEFAULT_MODEL = "google/gemini-2.0-flash-001";
 // Previous options:
 // export const DEFAULT_MODEL = "google/gemini-flash-1.5"; // Was removed from OpenRouter?
 // export const DEFAULT_MODEL = "mistralai/mistral-7b-instruct";
