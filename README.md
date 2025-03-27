@@ -47,26 +47,18 @@ yarn add openrouter-kit
 ## ✨ Basic Usage
 
 ```typescript
-import OpenRouter from 'openrouter-kit'; // Using the default export
+import OpenRouter from 'openrouter-kit';
 
-// Initialize the client with your API key
 const client = new OpenRouter({
-  apiKey: 'sk-or-v1-...' // Your OpenRouter API key
-  // debug: true, // Enable detailed logging
+  apiKey: 'sk-or-v1-',
+  model: 'google/gemini-2.0-flash-001' 
+  // debug: true,
 });
 
 async function main() {
   try {
-    // Simple request to the model
     const response = await client.chat({ prompt: 'Hello, world!' });
     console.log('Model response:', response);
-
-    // Example specifying a model
-    const haikuResponse = await client.chat({
-        model: 'google/gemini-2.0-flash-001',
-        prompt: 'Tell me a short joke about programmers.'
-    });
-    console.log(haikuResponse);
 
   } catch (error: any) {
     console.error(`An error occurred [${error.code || 'UNKNOWN'}]: ${error.message}`);
@@ -74,8 +66,6 @@ async function main() {
         console.error('Details:', error.details);
     }
   }
-  // Note: In short-lived scripts, calling client.destroy() is not strictly necessary, 
-  // but it's crucial in long-running applications to release resources (see below).
 }
 
 main();

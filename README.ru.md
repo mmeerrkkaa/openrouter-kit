@@ -46,35 +46,25 @@ yarn add openrouter-kit
 ## ✨ Базовое использование
 
 ```typescript
-import OpenRouter from 'openrouter-kit'; // Используем экспорт по умолчанию
+import OpenRouter from 'openrouter-kit';
 
-// Инициализация клиента с вашим API ключом
 const client = new OpenRouter({
-  apiKey: 'sk-or-v1-...' // Ваш ключ OpenRouter API
-  // debug: true, // Включить подробное логирование
+  apiKey: 'sk-or-v1-',
+  model: 'google/gemini-2.0-flash-001' 
+  // debug: true,
 });
 
 async function main() {
   try {
-    // Простой запрос к модели
-    const response = await client.chat({ prompt: 'Привет, мир!' });
-    console.log('Ответ модели:', response);
-
-    // Пример с указанием модели
-    const haikuResponse = await client.chat({
-        model: 'google/gemini-2.0-flash-001',
-        prompt: 'Расскажи короткую шутку про программистов.'
-    });
-    console.log(haikuResponse);
+    const response = await client.chat({ prompt: 'Hello, world!' });
+    console.log('Model response:', response);
 
   } catch (error: any) {
-    console.error(`Произошла ошибка [${error.code || 'UNKNOWN'}]: ${error.message}`);
+    console.error(`An error occurred [${error.code || 'UNKNOWN'}]: ${error.message}`);
     if (error.details) {
-        console.error('Детали:', error.details);
+        console.error('Details:', error.details);
     }
-  } 
-  // Примечание: В коротких скриптах вызов client.destroy() не строго обязателен, 
-  // но в долгоживущих приложениях его необходимо вызывать для освобождения ресурсов (см. ниже).
+  }
 }
 
 main();

@@ -1,6 +1,6 @@
 {
   "name": "openrouter-kit",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TypeScript/JavaScript client for OpenRouter API with history management and tool calls support",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -21,13 +21,14 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@types/jsonwebtoken": "^9.0.9",
+    "jsonwebtoken": "^9.0.0",
     "ajv": "^8.17.1",
     "axios": "^1.6.0",
     "https-proxy-agent": "^5.0.1"
   },
   "devDependencies": {
     "@types/jest": "^29.5.11",
+    "@types/jsonwebtoken": "^9.0.9",
     "@types/node": "^18.19.3",
     "@typescript-eslint/eslint-plugin": "^6.15.0",
     "@typescript-eslint/parser": "^6.15.0",
