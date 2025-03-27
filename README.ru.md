@@ -45,26 +45,19 @@ yarn add openrouter-kit
 
 ## ✨ Базовое использование
 
-```typescript
-import OpenRouter from 'openrouter-kit';
+js
+```js
+const { OpenRouterClient } = require("openrouter-kit");
 
-const client = new OpenRouter({
+const client = new OpenRouterClient({
   apiKey: 'sk-or-v1-',
-  model: 'google/gemini-2.0-flash-001' 
+  model: 'google/gemini-2.0-flash-001',
   // debug: true,
 });
 
 async function main() {
-  try {
     const response = await client.chat({ prompt: 'Hello, world!' });
     console.log('Model response:', response);
-
-  } catch (error: any) {
-    console.error(`An error occurred [${error.code || 'UNKNOWN'}]: ${error.message}`);
-    if (error.details) {
-        console.error('Details:', error.details);
-    }
-  }
 }
 
 main();
