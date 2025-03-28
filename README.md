@@ -129,9 +129,9 @@ The library automatically manages conversation history if `user` (and optionally
 **History Usage Example:**
 
 ```typescript
-import OpenRouter from 'openrouter-kit';
+import { OpenRouterClient } from 'openrouter-kit';
 
-const client = new OpenRouter({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
+const client = new OpenRouterClient({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
 const userId = 'user-abc';
 
 async function chatWithHistory(prompt: string) {
@@ -227,7 +227,7 @@ Pass an array of defined tools in the `chat` options. The library will automatic
 
 ```typescript
 async function askAboutWeather() {
-  const client = new OpenRouter({ apiKey: 'YOUR_KEY' });
+  const client = new OpenRouterClient({ apiKey: 'YOUR_KEY' });
   try {
     const response = await client.chat({
       prompt: 'What\'s the weather like in London?',
@@ -260,7 +260,7 @@ Provides comprehensive protection when working with tools and user authenticatio
 **Configuration (`SecurityConfig`)**:
 
 ```typescript
-import OpenRouter from 'openrouter-kit';
+import { OpenRouterClient } from 'openrouter-kit';
 import type { SecurityConfig } from 'openrouter-kit/security'; // Import type
 
 const jwtSecret = process.env.JWT_SECRET || 'default-secret-replace-in-production'; // IMPORTANT: Replace with a strong secret!
@@ -322,7 +322,7 @@ const securityConfig: SecurityConfig = {
   }
 };
 
-const client = new OpenRouter({
+const client = new OpenRouterClient({
   apiKey: 'YOUR_KEY',
   security: securityConfig // Pass the security configuration
 });
@@ -371,7 +371,7 @@ You can instruct the model to return a response in a specific JSON format.
 
 ```typescript
 async function getStructuredData() {
-  const client = new OpenRouter({ apiKey: 'YOUR_KEY' });
+  const client = new OpenRouterClient({ apiKey: 'YOUR_KEY' });
   try {
     // Request JSON object
     const jsonResponse = await client.chat({
@@ -466,13 +466,13 @@ Configure a proxy via the `proxy` option in the client configuration:
 
 ```typescript
 // URL string format
-const client1 = new OpenRouter({
+const client1 = new OpenRouterClient({
   apiKey: 'YOUR_KEY',
   proxy: 'http://user:password@your-proxy-server:8080'
 });
 
 // Object format
-const client2 = new OpenRouter({
+const client2 = new OpenRouterClient({
   apiKey: 'YOUR_KEY',
   proxy: {
     host: 'your-proxy-server.com',

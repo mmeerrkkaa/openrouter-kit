@@ -128,9 +128,9 @@ main();
 **Пример использования истории:**
 
 ```typescript
-import OpenRouter from 'openrouter-kit';
+import { OpenRouterClient } from 'openrouter-kit';
 
-const client = new OpenRouter({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
+const client = new OpenRouterClient({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
 const userId = 'user-abc';
 
 async function chatWithHistory(prompt: string) {
@@ -226,7 +226,7 @@ const weatherTool: Tool = {
 
 ```typescript
 async function askAboutWeather() {
-  const client = new OpenRouter({ apiKey: 'YOUR_KEY' });
+  const client = new OpenRouterClient({ apiKey: 'YOUR_KEY' });
   try {
     const response = await client.chat({
       prompt: 'Какая погода в Лондоне?',
@@ -259,7 +259,7 @@ askAboutWeather();
 **Конфигурация (`SecurityConfig`)**:
 
 ```typescript
-import OpenRouter from 'openrouter-kit';
+import { OpenRouterClient } from 'openrouter-kit';
 import type { SecurityConfig } from 'openrouter-kit/security'; // Импорт типа
 
 const jwtSecret = process.env.JWT_SECRET || 'default-secret-replace-in-production'; // ВАЖНО: Замените на надежный секрет!
@@ -321,7 +321,7 @@ const securityConfig: SecurityConfig = {
   }
 };
 
-const client = new OpenRouter({
+const client = new OpenRouterClient({
   apiKey: 'YOUR_KEY',
   security: securityConfig // Передаем конфигурацию безопасности
 });
@@ -370,7 +370,7 @@ client.on('ratelimit:exceeded', (event) => {
 
 ```typescript
 async function getStructuredData() {
-  const client = new OpenRouter({ apiKey: 'YOUR_KEY' });
+  const client = new OpenRouterClient({ apiKey: 'YOUR_KEY' });
   try {
     // Запрос JSON объекта
     const jsonResponse = await client.chat({
@@ -465,13 +465,13 @@ client.on('error', (error) => {
 
 ```typescript
 // Формат строки URL
-const client1 = new OpenRouter({
+const client1 = new OpenRouterClient({
   apiKey: 'YOUR_KEY',
   proxy: 'http://user:password@your-proxy-server:8080'
 });
 
 // Формат объекта
-const client2 = new OpenRouter({
+const client2 = new OpenRouterClient({
   apiKey: 'YOUR_KEY',
   proxy: {
     host: 'your-proxy-server.com',
