@@ -1,15 +1,16 @@
 // Path: security/access-control-manager.ts
-import { IAccessControlManager, SecurityCheckParams, SecurityContext, UserAuthInfo, ISecurityEventEmitter } from './types';
+import { IAccessControlManager, SecurityCheckParams, SecurityContext, UserAuthInfo } from './types';
 import { Tool } from '../types';
 import { Logger } from '../utils/logger';
 import { AccessDeniedError } from '../utils/error';
+import type { SimpleEventEmitter } from '../utils/simple-event-emitter';
 
 export class AccessControlManager implements IAccessControlManager {
-  private eventEmitter: ISecurityEventEmitter;
+  private eventEmitter: SimpleEventEmitter; // Use SimpleEventEmitter type
   private logger: Logger;
   private debugMode: boolean = false;
 
-  constructor(eventEmitter: ISecurityEventEmitter, logger: Logger) {
+  constructor(eventEmitter: SimpleEventEmitter, logger: Logger) { // Use SimpleEventEmitter type
     this.eventEmitter = eventEmitter;
     this.logger = logger;
   }
@@ -48,7 +49,6 @@ export class AccessControlManager implements IAccessControlManager {
     }
   }
 
-  /** @private */
   private async getAccessDenialReason(tool: Tool, userInfo: UserAuthInfo | null, context: SecurityContext): Promise<string | null> {
     const toolName = tool.function?.name || tool.name;
     const config = context.config;
@@ -84,10 +84,10 @@ export class AccessControlManager implements IAccessControlManager {
                    return `Tool not allowed for role '${userInfo.role}' in config.roles.`;
                }
            } else {
-                // If there's no explicit permission in toolAccess or roles, we deny access
-                // But only if the user doesn't have special permissions (checked below)
-                // For now, just remember that access is not allowed by configuration
-                // return `Access denied by 'deny-all' and tool not explicitly allowed.`;
+               // If default policy is deny-all and no specific rule allows access, deny unless overridden by tool-specific requirements handled below.
+               // Need to check tool-specific requirements before definitively denying.
+               // Consider the case where a tool requires a specific scope, which the user might have even if not explicitly allowed by role or toolAccess.
+               // Let's defer the denial until after checking tool-specific security rules.
            }
        }
     }
@@ -96,9 +96,9 @@ export class AccessControlManager implements IAccessControlManager {
     if (toolSecurity?.requiredRole) {
        if (!userInfo) return `Authentication required (role).`;
        const requiredRoles = Array.isArray(toolSecurity.requiredRole) ? toolSecurity.requiredRole : [toolSecurity.requiredRole];
-       const hasRequiredBaseRole = userInfo.role && requiredRoles.includes(userInfo.role);
-       const hasRequiredExtendedRole = userInfo.roles && requiredRoles.some(reqRole => userInfo.roles!.includes(reqRole));
-       if (!hasRequiredBaseRole && !hasRequiredExtendedRole) {
+       const userRoles = [userInfo.role, ...(userInfo.roles || [])].filter(Boolean) as string[];
+       const hasRequiredRole = requiredRoles.some(reqRole => userRoles.includes(reqRole));
+       if (!hasRequiredRole) {
            return `One of the following roles required: ${requiredRoles.join(', ')}.`;
        }
     }
@@ -112,7 +112,44 @@ export class AccessControlManager implements IAccessControlManager {
         }
     }
 
-    // If no denial reason found after all checks, access is granted
+    // Final check for deny-all after evaluating tool-specific requirements
+    if (config.defaultPolicy === 'deny-all') {
+        const toolAccessConfig = config.toolAccess?.[toolName];
+        const globalToolAccessConfig = config.toolAccess?.['*'];
+        let isAllowedByToolAccess = toolAccessConfig?.allow === true;
+        let isAllowedGlobally = globalToolAccessConfig?.allow === true && toolAccessConfig?.allow !== false;
+        let isAllowedByRole = false;
+
+        if (userInfo?.role && toolAccessConfig?.roles) {
+            const allowedRoles = Array.isArray(toolAccessConfig.roles) ? toolAccessConfig.roles : [toolAccessConfig.roles];
+            if (allowedRoles.includes(userInfo.role)) isAllowedByToolAccess = true;
+        }
+        if (userInfo?.role && globalToolAccessConfig?.roles) {
+             const allowedRoles = Array.isArray(globalToolAccessConfig.roles) ? globalToolAccessConfig.roles : [globalToolAccessConfig.roles];
+             if (allowedRoles.includes(userInfo.role) && toolAccessConfig?.allow !== false) isAllowedGlobally = true;
+         }
+        if (userInfo?.apiKey && toolAccessConfig?.allowedApiKeys) {
+            if (toolAccessConfig.allowedApiKeys.includes(userInfo.apiKey) || toolAccessConfig.allowedApiKeys.includes('*')) isAllowedByToolAccess = true;
+        }
+         if (userInfo?.apiKey && globalToolAccessConfig?.allowedApiKeys) {
+             if ((globalToolAccessConfig.allowedApiKeys.includes(userInfo.apiKey) || globalToolAccessConfig.allowedApiKeys.includes('*')) && toolAccessConfig?.allow !== false) isAllowedGlobally = true;
+         }
+
+         if (userInfo?.role && config.roles?.roles?.[userInfo.role]) {
+             const roleConfig = config.roles.roles[userInfo.role];
+             const allowedTools = Array.isArray(roleConfig.allowedTools) ? roleConfig.allowedTools : (typeof roleConfig.allowedTools === 'string' ? [roleConfig.allowedTools] : []);
+             if (allowedTools.includes('*') || allowedTools.includes(toolName)) {
+                isAllowedByRole = true;
+             }
+         }
+
+        // Deny if not explicitly allowed by toolAccess, globalAccess, or role config
+        if (!isAllowedByToolAccess && !isAllowedGlobally && !isAllowedByRole) {
+            return `Access denied by 'deny-all' default policy and no specific allow rule matched.`;
+        }
+    }
+
+
     return null;
   }
 

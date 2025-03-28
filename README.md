@@ -1,40 +1,36 @@
+# OpenRouter Kit
+
+[![npm version](https://badge.fury.io/js/openrouter-kit.svg)](https://badge.fury.io/js/openrouter-kit) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![TypeScript](https://img.shields.io/badge/%3C/%3E-TypeScript-%230074C1.svg)](http://www.typescriptlang.org/)
 
 [🇷🇺 Русский](./README.ru.md) | **🇬🇧 English**
 ---
 
-# OpenRouter Kit
-
-[![npm version](https://badge.fury.io/js/openrouter-kit.svg)](https://badge.fury.io/js/openrouter-kit) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-A convenient TypeScript/JavaScript client for interacting with the [OpenRouter API](https://openrouter.ai/), providing:
-
-*   A simple interface for querying various LLMs via `/chat/completions`.
-*   Automatic conversation history management (in-memory or disk-based).
-*   Handling of tool calls (function calling) requested by models.
-*   A robust security module for authentication, access control, rate limiting, and tool argument validation.
-*   Flexible configuration (API key, model, proxy, headers, etc.).
-*   Typed errors and an event system.
+**OpenRouter Kit** is a powerful and convenient TypeScript/JavaScript library for interacting with the [OpenRouter API](https://openrouter.ai/). It simplifies sending requests to LLMs, automatically manages conversation history, handles tool calls (function calling), and provides a robust security module.
 
 ## 🚀 Key Features
 
-*   **Universal Chat:** Send requests to any model supported by OpenRouter.
-*   **History Management:** Automatically save and inject conversation history for each user/group. Supports in-memory (`memory`) and disk (`disk`) storage with TTL and auto-cleanup.
-*   **Tool Handling (Function Calling):**
-    *   Define tools with JSON Schema for arguments.
-    *   Automatic parsing and validation of arguments provided by the model.
-    *   Execution of your functions (`execute`) with context (including user info).
-    *   Sending tool execution results back to the model for a final response.
-*   **Security Module:**
-    *   **Authentication:** JWT support (creation, validation, caching).
-    *   **Access Control:** Configure tool access based on roles, scopes, or explicit rules. `allow-all`/`deny-all` policies.
-    *   **Rate Limiting:** Limit the frequency of tool calls for users/roles.
-    *   **Argument Validation:** Sanitize and validate tool arguments to prevent dangerous operations.
-    *   **Security Events:** Subscribe to events (access denied, rate limit exceeded, dangerous arguments, etc.).
-*   **Flexible Configuration:** Set default model, API endpoint, timeouts, proxy, HTTP headers (`Referer`, `X-Title`), fallback models (`modelFallbacks`), response format (`responseFormat`), and more.
-*   **Typing:** Fully typed with TypeScript.
-*   **Error Handling:** Hierarchy of custom errors (`APIError`, `ValidationError`, `SecurityError`, etc.) for easy handling.
-*   **Logging:** Built-in logger with debug mode.
-*   **Client Events:** Subscribe to client events (e.g., `'error'`).
+*   **🤖 Universal Chat:** Simple API (`client.chat`) for interacting with any model available through OpenRouter.
+*   **📜 History Management:** Automatic loading, saving, and trimming of conversation history for each user or group.
+    *   Storage options: `memory` and `disk` (JSON files).
+    *   Automatic cleanup based on TTL and maximum size limits.
+    *   Reliable disk saving on Node.js process termination (optional).
+*   **🛠️ Tool Handling (Function Calling):** Seamless integration for models calling your functions.
+    *   Define tools with JSON Schema for argument validation.
+    *   Automatic parsing, schema validation, and **security checks** for arguments.
+    *   Execution of your `execute` functions with context (including `userInfo`).
+    *   Automatic submission of results back to the model to get the final response.
+*   **🛡️ Security Module:** Comprehensive protection for your applications.
+    *   **Authentication:** Built-in JWT support (generation, validation, caching). Easily extensible for other methods.
+    *   **Access Control (ACL):** Flexible configuration of tool access based on roles, API keys, scopes, or explicit rules (`allow`/`deny`).
+    *   **Rate Limiting:** Apply call frequency limits for tools per user or role.
+    *   **Argument Sanitization:** Checks tool arguments for potentially dangerous patterns (SQLi, XSS, command injection, etc.) with customization and audit mode.
+    *   **Event System:** Subscribe to security events (`access:denied`, `ratelimit:exceeded`, `security:dangerous_args`, etc.) for monitoring and logging.
+*   **⚙️ Flexible Configuration:** Set API key, default model, endpoint, timeouts, **proxy**, headers (`Referer`, `X-Title`), fallback models (`modelFallbacks`), response format (`responseFormat`), etc.
+*   **💡 Typing:** Fully written in TypeScript, providing autocompletion and type checking.
+*   **🚦 Error Handling:** Clear hierarchy of custom errors (`APIError`, `ValidationError`, `SecurityError`, `RateLimitError`, etc.) with codes and details.
+*   **📝 Logging:** Built-in flexible logger with prefix support and debug mode.
+*   **✨ Ease of Use:** High-level API hiding the complexity of interacting with LLMs and tools.
+*   **🧹 Resource Management:** `destroy()` method for proper resource cleanup (timers, caches, handlers) in long-running applications.
 
 ## 📦 Installation
 
@@ -42,372 +38,451 @@ A convenient TypeScript/JavaScript client for interacting with the [OpenRouter A
 npm install openrouter-kit
 # or
 yarn add openrouter-kit
+# or
+pnpm add openrouter-kit
 ```
 
 ## ✨ Basic Usage
 
-js
-```js
-const { OpenRouterClient } = require("openrouter-kit");
+**TypeScript:**
 
-const client = new OpenRouterClient({
-  apiKey: 'sk-or-v1-',
-  model: 'google/gemini-2.0-flash-001',
-  // debug: true,
+```typescript
+import OpenRouter from 'openrouter-kit';
+
+const client = new OpenRouter({
+  apiKey: process.env.OPENROUTER_API_KEY || 'sk-or-v1-...',
 });
 
 async function main() {
-    const response = await client.chat({ prompt: 'Hello, world!' });
-    console.log('Model response:', response);
+  const response = await client.chat({
+    prompt: 'Say hi!',
+    model: 'google/gemini-2.0-flash-001',
+  });
+  console.log('Model response:', response);
 }
 
 main();
+```
+
+**JavaScript (CommonJS):**
+
+```javascript
+const { OpenRouterClient } = require("openrouter-kit");
+
+const client = new OpenRouterClient({
+  apiKey: process.env.OPENROUTER_API_KEY || 'sk-or-v1-...',
+});
+
+async function main() {
+  const response = await client.chat({ prompt: 'Hello, world!' });
+  console.log('Model response:', response);
+}
+
+main();
+```
+
+## A More Interesting Example (Taxi Bot)
+
+```javascript
+const { OpenRouterClient } = require("openrouter-kit");
+const readline = require('readline');
+
+// No proxy used in this example
+const client = new OpenRouterClient({
+  apiKey: process.env.OPENROUTER_API_KEY || "sk-or-v1-...",
+  model: "google/gemini-2.0-flash-001",
+  historyStorage: "memory",
+  // debug: true // Uncomment for verbose logs
+});
+
+let orderAccepted = false; // Global state for simplicity in this example
+
+// --- Tool Definitions ---
+const taxiTools = [
+  {
+    type: "function",
+    function: {
+      name: "estimateRideCost",
+      description: "Estimates the cost of a taxi ride between two locations.",
+      parameters: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "Pickup address" },
+          to: { type: "string", description: "Destination address" }
+        },
+        required: ["from", "to"]
+      },
+    },
+     // The actual function to execute
+    execute: async (args) => {
+      console.log(`[Tool] Estimating cost from ${args.from} to ${args.to}`);
+      const cost = Math.floor(Math.random() * 45) + 5; // Simulate cost calculation
+      return {
+        from: args.from,
+        to: args.to,
+        estimatedCost: cost,
+        currency: "USD"
+      };
+    }
+  },
+  {
+    type: "function",
+    function: {
+      name: "acceptOrder",
+      description: "Accepts the taxi order and assigns a driver.",
+      parameters: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "Pickup address" },
+          to: { type: "string", description: "Destination address" }
+        },
+        required: ["from", "to"]
+      },
+    },
+     // The actual function to execute
+    execute: async (args) => {
+      console.log(`[Tool] Accepting order from ${args.from} to ${args.to}`);
+      const driverNumber = Math.floor(Math.random() * 100) + 1;
+      orderAccepted = true; // Update global state
+      // Return a string confirming the action
+      return `Order accepted. Driver ${driverNumber} is on the way to pick you up from ${args.from}. Destination: ${args.to}`;
+    }
+  }
+];
+
+const rl = readline.createInterface({
+  input: process.stdin,
+  output: process.stdout
+});
+
+function askQuestion(query) {
+  return new Promise((resolve) => {
+    rl.question(query, (answer) => {
+      resolve(answer);
+    });
+  });
+}
+
+const systemPrompt = `You are a helpful taxi service operator. Your goal is to help the customer order a taxi.
+You can ask clarifying questions if the customer does not provide addresses.
+First, estimate the cost using 'estimateRideCost'.
+After the user confirms the cost, use 'acceptOrder' to book the ride.`;
+
+async function chatWithTaxiBot() {
+  const userId = "taxi_user_1";
+  console.log("Bot: Hello! Welcome to OpenRouterKit Taxi service. How can I help you today?");
+
+  try {
+    while (!orderAccepted) {
+      const userMessage = await askQuestion("You: ");
+      if (userMessage.toLowerCase() === 'quit') break;
+
+      const response = await client.chat({
+        user: userId, // Enable history for this user
+        prompt: userMessage,
+        systemPrompt: systemPrompt,
+        tools: taxiTools, // Provide the tools
+        temperature: 0.6,
+      });
+
+      console.log(`\nBot: ${response}\n`);
+
+      if (orderAccepted) {
+        console.log("Bot: Your taxi order has been successfully placed. Have a great ride!");
+      }
+    }
+  } catch (error) {
+    console.error("Error:", error);
+  } finally {
+    rl.close();
+    await client.destroy(); // Important: Clean up client resources
+  }
+}
+
+// Run the bot
+chatWithTaxiBot();
+
 ```
 
 ## 📚 Core Concepts
 
 ### `OpenRouterClient`
 
-The main class for interacting with the API.
+This is your main entry point for interacting with the library.
 
 **Configuration (`OpenRouterConfig`)**:
 
-When creating an `OpenRouterClient` instance, you pass a configuration object with the following key fields:
+Passed to `new OpenRouterClient(config)`. Key fields include:
 
-*   `apiKey` (string, **required**): Your OpenRouter API key.
-*   `model` (string, optional): Default model for requests (default: `google/gemini-2.0-flash-001`).
-*   `debug` (boolean, optional): Enable detailed logging (default: `false`).
+*   `apiKey` (string, **required**): Your OpenRouter API key. **Use environment variables.**
+*   `model` (string, optional): Default model for requests (default: see `config.ts`, e.g., `google/gemini-2.0-flash-001`).
+*   `debug` (boolean, optional): Enable verbose logging (default: `false`).
 *   `historyStorage` ('memory' | 'disk', optional): History storage type (default: `memory`).
-*   `historyAutoSave` (boolean, optional): Automatically save history on exit for `disk` (default: `false`).
-*   `historyTtl` (number, optional): Time-to-live for history entries in ms (default: 24 hours).
-*   `historyCleanupInterval` (number, optional): Interval for cleaning up stale history entries in ms (default: 1 hour).
-*   `security` (SecurityConfig, optional): Configuration for the security module (see below).
-*   `proxy` (string | object, optional): HTTP/HTTPS proxy settings.
-*   `apiEndpoint` (string, optional): OpenRouter API URL (default: official endpoint).
-*   `referer`, `title` (string, optional): `HTTP-Referer` and `X-Title` headers.
-*   `modelFallbacks` (string[], optional): List of fallback models.
+*   `historyAutoSave` (boolean, optional): Auto-save history on exit for `disk` (default: `false`).
+*   `historyTtl` (number, optional): History entry lifetime in ms (default: 24 hours).
+*   `historyCleanupInterval` (number, optional): Interval for history cleanup in ms (default: 1 hour).
+*   `security` (SecurityConfig, optional): Security module configuration (see below). **Important for tool handling!**
+*   `proxy` (string | object, optional): HTTP/HTTPS proxy settings (URL or `{ host, port, user?, pass? }`).
+*   `apiEndpoint` (string, optional): OpenRouter API URL.
+*   `referer`, `title` (string, optional): `HTTP-Referer` and `X-Title` headers (for OpenRouter stats).
+*   `modelFallbacks` (string[], optional): List of fallback models to try if the primary fails.
 *   `responseFormat` (ResponseFormat, optional): Default response format (e.g., `{ type: 'json_object' }`).
-*   `strictJsonParsing` (boolean, optional): Strict mode for JSON parsing/validation in responses (default: `false`).
-*   `axiosConfig` (AxiosRequestConfig, optional): Additional Axios settings.
+*   `strictJsonParsing` (boolean, optional): Strict JSON parsing/validation mode for responses (default: `false`). If `true`, throws on invalid JSON; if `false`, returns `null`.
+*   `axiosConfig` (AxiosRequestConfig, optional): Additional settings for Axios (e.g., custom headers, timeouts).
 
 **Core Methods**:
 
-*   `chat(options: OpenRouterRequestOptions): Promise<any>`: Sends a request to the model.
-    *   `options.prompt` (string): User's query (if not `customMessages`).
+*   `chat(options: OpenRouterRequestOptions): Promise<any>`: Sends a request to the model. Handles history and tool calls automatically.
+    *   `options.prompt` (string): User's prompt.
     *   `options.user` (string): User ID for history management.
-    *   `options.group` (string | null): Group/chat ID for history (optional).
-    *   `options.systemPrompt` (string | null): System message.
-    *   `options.tools` (Tool[] | null): List of available tools.
-    *   `options.responseFormat` (ResponseFormat | null): Response format for this request.
-    *   `options.customMessages` (Message[] | null): Full list of messages (instead of prompt/history).
-    *   `options.accessToken` (string | null): Access token (if using `SecurityManager`).
-    *   ... other API parameters (temperature, maxTokens, topP, etc.).
-    *   Returns: `string` (text response), `object` (if JSON requested and parsing/validation succeeded), `null` (if JSON requested, `strictJsonParsing=false`, and parsing/validation failed).
-*   `setModel(model: string): void`: Sets the default model.
-*   `setApiKey(apiKey: string): void`: Updates the API key.
-*   `createAccessToken(userInfo, expiresIn?): string`: Creates a JWT token (requires configured `SecurityManager`).
-*   `on(event, handler)`: Subscribe to events (`'error'`, security events).
-*   `off(event, handler)`: Unsubscribe from events.
-*   `getHistoryManager(): HistoryManager`: Get the history manager instance.
-*   `getSecurityManager(): SecurityManager | null`: Get the security manager instance.
-*   `destroy(): Promise<void>`: **Releases resources!**
-    *   **What it does:** Stops internal timers (`HistoryManager`, `RateLimitManager`), clears in-memory caches (tokens, rate limit counters, history in `memory`), attempts to save history to disk (if `historyStorage='disk'` and `autoSaveOnExit=true`), removes Node.js process event handlers and internal event listeners.
-    *   **When to call:** It is **highly recommended** to call this method when the client instance is no longer needed, especially in **long-running applications (servers)** or when **dynamically creating/destroying clients**.
-    *   **Why call it:** Prevents memory leaks (due to unclosed timers and undeleted event handlers) and resource leaks, ensures proper shutdown, and guarantees history data persistence.
-    *   **When it's less critical (but still good practice):** In very simple, short-lived scripts that execute and terminate immediately (the OS will clean up process resources).
+    *   `options.tools` (Tool[]): List of available tools.
+    *   `options.accessToken` (string): JWT access token (if using `SecurityManager`).
+    *   ...and other API parameters (`model`, `systemPrompt`, `temperature`, `maxTokens`, `responseFormat`, etc.).
+    *   Returns: Model response (`string`), parsed object (`object` if JSON requested), or `null` (on JSON parse error with `strictJsonParsing: false`).
+*   `setModel(model: string)`: Sets the default model.
+*   `setApiKey(apiKey: string)`: Updates the API key.
+*   `createAccessToken(userInfo, expiresIn?)`: Creates a JWT (requires JWT `SecurityManager`).
+*   `on(event, handler)` / `off(event, handler)`: Subscribe/unsubscribe from events (`'error'`, security events).
+*   `getHistoryManager()`: Access the history manager instance.
+*   `getSecurityManager()`: Access the security manager instance.
+*   `destroy(): Promise<void>`: **IMPORTANT!** Releases resources (timers, caches, handlers). **Call this when done with the client**, especially in server applications, to prevent memory/resource leaks.
 
 ### 📜 History Management (`HistoryManager`)
 
-The library automatically manages conversation history if `user` (and optionally `group`) is provided in `client.chat()` calls.
+The library automatically loads and saves history if `user` (and optionally `group`) is provided in `client.chat()`.
 
-*   **Storage:** `memory` (default) or `disk` (saves JSON files to a folder, default `./.openrouter-chats`).
-*   **History Key:** Generated based on `user` and `group`.
-*   **Limit:** Stores the last `maxHistoryEntries` (default: 20) message pairs (user/assistant).
-*   **Cleanup:** Automatically removes stale histories (based on `ttl`, default 24 hours) at the `cleanupInterval` (default 1 hour).
-*   **Autosave:** The `historyAutoSave: true` option (for `disk`) saves history upon process termination (SIGINT/SIGTERM).
+*   **Automatic:** No need to manually construct the `messages` array unless you need full control (`customMessages`).
+*   **Storage:** `memory` (fast, non-persistent) or `disk` (saves JSON to `./.openrouter-chats` by default).
+*   **Configuration:** Control size (`maxHistoryEntries`), lifetime (`ttl`), cleanup interval (`cleanupInterval`), and auto-save (`historyAutoSave`) via client configuration.
 
-**History Usage Example:**
+**Example (TypeScript):**
 
 ```typescript
-import { OpenRouterClient } from 'openrouter-kit';
+import OpenRouter from 'openrouter-kit';
 
-const client = new OpenRouterClient({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
-const userId = 'user-abc';
+const client = new OpenRouter({ apiKey: 'YOUR_KEY', historyStorage: 'memory' });
+const userId = 'user-xyz';
 
 async function chatWithHistory(prompt: string) {
   console.log(`> User (${userId}): ${prompt}`);
-  // Pass 'user' to enable history management
+  // Just pass the user ID, the library handles the rest
   const response = await client.chat({ prompt, user: userId });
   console.log(`< Assistant: ${response}`);
   return response;
 }
 
 async function runConversation() {
-  await chatWithHistory('Hello! My name is Alex.');
-  await chatWithHistory('What is the weather like in Moscow today?');
-  await chatWithHistory('What is my name?'); // The model should remember the name from history
-  
-  // In applications where the client is used long-term, calling destroy is important
-  await client.destroy();
+  await chatWithHistory('My favorite color is blue.');
+  await chatWithHistory('What is my favorite color?'); // Model should remember
+  await client.destroy(); // Cleanup
 }
 
 runConversation();
 ```
 
-Access the history manager: `client.getHistoryManager()`.
-
 ### 🛠️ Tool Handling (Function Calling)
 
-Models can request to call your functions (tools) to get external information or perform actions.
+Allows models to call your functions.
 
 **1. Define a Tool (`Tool`)**:
-
-Tools are defined as objects matching the `Tool` interface and passed to `client.chat()` via the `tools` option.
+Define tools using the `Tool` interface. Key fields: `type: 'function'`, `function.name`, `function.parameters` (JSON Schema), and `execute` (your function).
 
 ```typescript
-import { Tool, ToolContext } from 'openrouter-kit'; // Import types
+import { Tool, ToolContext } from 'openrouter-kit';
 
-// Example weather fetching function
-async function getCurrentWeather(location: string, unit: 'celsius' | 'fahrenheit' = 'celsius'): Promise<object> {
-    console.log(`[Tool] Fetching weather for ${location} (${unit})`);
-    // ... weather API call logic here ...
-    // Return an object to be serialized to JSON
-    return { location, temperature: "25", unit, forecast: "sunny" };
+// Example simple function
+async function getUserData(userId: string): Promise<{ id: string; name: string; email: string } | null> {
+  console.log(`[Tool] Fetching data for user ${userId}`);
+  // Simulate fetching data
+  if (userId === '123') {
+    return { id: userId, name: 'Alice', email: 'alice@example.com' };
+  }
+  return null;
 }
 
-// Tool definition for the API
-const weatherTool: Tool = {
+// Tool definition
+const getUserDataTool: Tool = {
   type: 'function',
   function: {
-    name: 'getCurrentWeather', // Name the LLM will use
-    description: 'Get the current weather in a specified location',
-    parameters: { // JSON Schema for arguments
+    name: 'getUserData',
+    description: 'Fetches user data based on their ID.',
+    parameters: {
       type: 'object',
       properties: {
-        location: {
-          type: 'string',
-          description: 'The city or location, e.g., Moscow or San Francisco',
-        },
-        unit: {
-          type: 'string',
-          enum: ['celsius', 'fahrenheit'],
-          description: 'Unit for temperature',
-        },
+        userId: { type: 'string', description: 'The ID of the user to fetch.' },
       },
-      required: ['location'], // Required arguments
+      required: ['userId'],
     },
   },
-  // Function that will be called by the library
-  execute: async (args: { location: string; unit?: 'celsius' | 'fahrenheit' }, context?: ToolContext) => {
-      // args - parsed and validated arguments
-      // context - contains userInfo and securityManager (if available)
-      console.log(`Executing getCurrentWeather for user: ${context?.userInfo?.userId || 'unknown'}`);
-      return getCurrentWeather(args.location, args.unit);
+  // Your function to be called by the library
+  execute: async (args: { userId: string }, context?: ToolContext) => {
+    console.log(`Executing getUserData initiated by user: ${context?.userInfo?.userId || 'unknown'}`);
+    const userData = await getUserData(args.userId);
+    if (!userData) {
+      // It's good practice to return an object describing the result
+      return { error: 'User not found' };
+    }
+    return userData; // Will return { id: '123', name: 'Alice', email: 'alice@example.com' }
   },
-  // (Optional) Security settings for this tool
   security: {
-      // requiredRole: 'premium_user',
-      // rateLimit: { limit: 5, period: 'minute' }
+      // requiredRole: 'admin', // Example access restriction
   }
 };
 ```
 
-**2. Using Tools in `chat()`**:
-
-Pass an array of defined tools in the `chat` options. The library will automatically:
-
-1.  Send tool definitions to the model.
-2.  If the model decides to call a tool, receive the `tool_calls`.
-3.  Parse arguments from the JSON string provided by the model.
-4.  Validate arguments against the JSON Schema from the tool definition.
-5.  **(If `SecurityManager` is configured)** Perform security checks: access, rate limits, dangerous arguments.
-6.  Call your `execute` function with parsed arguments and context.
-7.  Send the execution result (or error) back to the model.
-8.  Return the final text response from the model after processing tool results.
+**2. Use Tools in `chat()`**:
+Pass an array of tools to `client.chat({ tools: [...] })`. The library handles the entire cycle: sending definitions -> receiving call request -> parsing arguments -> validating schema -> security checks -> calling `execute` -> sending results -> getting the final response.
 
 ```typescript
-async function askAboutWeather() {
-  const client = new OpenRouterClient({ apiKey: 'YOUR_KEY' });
+// TypeScript Example
+import OpenRouter from 'openrouter-kit';
+// import { getUserDataTool } from './tools'; // Assuming tool is defined elsewhere
+
+async function findUser() {
+  const client = new OpenRouter({ apiKey: 'YOUR_KEY' /*, security: securityConfig */ }); // Security config optional
   try {
     const response = await client.chat({
-      prompt: 'What\'s the weather like in London?',
-      tools: [weatherTool] // Pass our tool
+      prompt: "Get data for user with ID 123.",
+      tools: [getUserDataTool] // Provide the tool definition
     });
-    console.log('Final response:', response);
+    console.log('Final response:', response); // e.g., "The data for user 123 is: Name: Alice, Email: alice@example.com."
   } catch (error: any) {
     console.error('Error:', error.message);
   } finally {
-    // Important for long-running applications
     await client.destroy();
   }
 }
 
-askAboutWeather();
+findUser();
 ```
 
 ### 🔒 Security Module (`SecurityManager`)
 
-Provides comprehensive protection when working with tools and user authentication. Activated by passing the `security` configuration when creating the client.
+Activated by passing `security: SecurityConfig` to the `OpenRouterClient` constructor. **Highly recommended when using tools**, especially if they perform actions or access sensitive data.
 
-**Components:**
+**Key Configuration Aspects (`SecurityConfig`):**
 
-*   `AuthManager`: Manages authentication (currently JWT implementation).
-*   `AccessControlManager`: Checks tool access permissions based on roles and policies.
-*   `RateLimitManager`: Tracks and enforces tool call frequency limits.
-*   `ArgumentSanitizer`: Scans tool arguments for potentially dangerous strings.
-*   `SecurityEventEmitter`: Security event bus.
+*   `defaultPolicy`: `'deny-all'` (recommended) or `'allow-all'`. Determines access if no specific rule matches.
+*   `requireAuthentication`: `true` - Require a valid `accessToken` for ANY request involving tools.
+*   `allowUnauthenticatedAccess`: `true` - Allow tool calls without an `accessToken` (if `requireAuthentication: false` and the tool allows anonymous access).
+*   `userAuthentication`: Auth settings (e.g., `{ type: 'jwt', jwtSecret: 'YOUR_STRONG_SECRET' }`). **Never use default secrets in production!**
+*   `toolAccess`: Access rules per tool (`allow`, `roles`, `scopes`, `rateLimit`, `allowedApiKeys`).
+*   `roles`: Definition of roles and their permissions/limits.
+*   `dangerousArguments`: Argument checking setup (`blockedValues`, `globalPatterns`, `toolSpecificPatterns`, `extendablePatterns`, `auditOnlyMode`).
 
-**Configuration (`SecurityConfig`)**:
+**Configuration and Usage Example (TypeScript):**
 
 ```typescript
-import { OpenRouterClient } from 'openrouter-kit';
-import type { SecurityConfig } from 'openrouter-kit/security'; // Import type
+import OpenRouter from 'openrouter-kit';
+import type { SecurityConfig } from 'openrouter-kit'; // Use named import for type
 
-const jwtSecret = process.env.JWT_SECRET || 'default-secret-replace-in-production'; // IMPORTANT: Replace with a strong secret!
+const jwtSecret = process.env.JWT_SECRET || 'very-secret-key-CHANGE-ME'; // Use env var!
 
 const securityConfig: SecurityConfig = {
-  debug: true, // Enable security logging
-  defaultPolicy: 'deny-all', // Deny tool access by default
-  requireAuthentication: false, // Require authentication for ANY request with tools?
-  allowUnauthenticatedAccess: false, // Allow tool access WITHOUT a token (if requireAuthentication=false)?
+  debug: process.env.NODE_ENV === 'development', // Enable logs in dev
+  defaultPolicy: 'deny-all',
+  requireAuthentication: true, // Require token for all tool calls
 
-  // Authentication settings
   userAuthentication: {
     type: 'jwt',
-    jwtSecret: jwtSecret, // Secret for signing and verifying JWTs
+    jwtSecret: jwtSecret,
   },
 
-  // Tool access settings (override defaultPolicy)
   toolAccess: {
-    // Global rules for all tools
-    '*': {
-      // allow: false // Can deny all by default here too (if defaultPolicy='allow-all')
-      // rateLimit: { limit: 100, period: 'hour' } // Global limit
-    },
-    // Rules for a specific tool
+    // Allow weather tool only for 'user' role, limit 10/min
     'getCurrentWeather': {
-      allow: true, // Allow calling getCurrentWeather
-      roles: ['user', 'admin'], // Only for users with 'user' or 'admin' roles
-      rateLimit: { limit: 10, period: 'minute' } // Limit for this specific tool
-    },
-    'adminTool': {
       allow: true,
-      roles: ['admin'], // Only for admins
+      roles: ['user'],
+      rateLimit: { limit: 10, period: 'minute' }
     },
-    'publicTool': {
-      allow: true, // Allowed for everyone (even anonymous if allowUnauthenticatedAccess=true)
+    // Allow admin tool only for 'admin' role
+    'adminAction': {
+      allow: true,
+      roles: ['admin'],
     }
   },
 
-  // Role definitions (optional, limits and access can be set directly in toolAccess)
-  roles: {
-      roles: {
-          'admin': {
-              allowedTools: ['*'], // All tools allowed
-              // rateLimits: { '*': { limit: 1000, period: 'hour' }} // Limit for all tools for admin
-          },
-          'user': {
-              allowedTools: ['getCurrentWeather', 'publicTool'], // Explicitly allowed tools
-              // rateLimits: { 'getCurrentWeather': { limit: 5, period: 'minute' }}
-          }
-      }
-  },
-
-  // Dangerous argument check configuration
   dangerousArguments: {
-    blockedValues: ['DROP TABLE', '--'], // Forbidden substrings
-    // toolSpecificPatterns: { // Regex for specific tools
-    //   'executeShellCommand': [/rm -rf/, /mkfs/]
-    // }
+    auditOnlyMode: false, // Block dangerous args by default
+    extendablePatterns: [/custom_danger_pattern/i], // Add custom patterns
   }
 };
 
-const client = new OpenRouterClient({
+const client = new OpenRouter({
   apiKey: 'YOUR_KEY',
-  security: securityConfig // Pass the security configuration
+  security: securityConfig
 });
 
 // --- Usage ---
 
-// 1. Create an access token for a user (e.g., after login)
-try {
-    const userInfo = { userId: 'user-123', role: 'user', scopes: ['read'] };
-    const accessToken = client.createAccessToken(userInfo, '24h'); // Create JWT
-    console.log('Access Token:', accessToken);
+async function secureToolCall() {
+  try {
+    // 1. Create token (e.g., after user login)
+    const userInfo = { userId: 'alice-456', role: 'user' };
+    const accessToken = client.createAccessToken(userInfo, '1h'); // Create JWT valid for 1 hour
 
     // 2. Call chat with the token
-    async function callToolWithAuth(token: string) {
-        const response = await client.chat({
-            prompt: 'What\'s the weather in Berlin?',
-            tools: [weatherTool], // Weather tool
-            accessToken: token // Pass the token
-        });
-        console.log('Response with tool:', response);
-    }
-    // await callToolWithAuth(accessToken);
+    const response = await client.chat({
+      prompt: 'What is the weather like in Paris?',
+      tools: [/* weatherTool defined elsewhere */],
+      accessToken: accessToken // Pass the token
+    });
+    console.log('Response:', response);
 
-} catch(e: any) {
-    console.error("Error working with token or chat:", e.message);
+  } catch (e: any) {
+    // Handle specific security errors
+    console.error(`Security/Chat Error: ${e.message} (Code: ${e.code})`, e.details);
+  } finally {
+    await client.destroy();
+  }
 }
 
 // Subscribe to security events
 client.on('access:denied', (event) => {
-    console.warn(`[EVENT] Access Denied: User '${event.userId || 'anon'}' to Tool '${event.toolName}'. Reason: ${event.reason}`);
-});
-client.on('ratelimit:exceeded', (event) => {
-     console.warn(`[EVENT] Rate Limit Exceeded: User '${event.userId}' for Tool '${event.toolName}' (Limit: ${event.limit})`);
+  console.warn(`[Event] Access Denied: User ${event.userId} to ${event.toolName}. Reason: ${event.reason}`);
 });
 
-// Don't forget client.destroy() when shutting down the application
-// await client.destroy();
+secureToolCall();
 ```
 
 ### ⚙️ Response Format (`responseFormat`)
 
-You can instruct the model to return a response in a specific JSON format.
+Force the model to generate a response as JSON.
 
-*   `{ type: 'json_object' }`: The model will return a valid JSON object.
-*   `{ type: 'json_schema', json_schema: { name: 'MySchema', schema: { ... } } }`: The model will return JSON conforming to your JSON Schema.
+*   `{ type: 'json_object' }`: Ensures a valid JSON object.
+*   `{ type: 'json_schema', json_schema: { name: '...', schema: { ... } } }`: Ensures JSON conforming to your schema.
+
+**Note:** When using `responseFormat` with `strictJsonParsing: false` (default), if the model returns invalid JSON or JSON not matching the schema, `client.chat()` will return `null`. If `strictJsonParsing: true`, a `ValidationError` will be thrown.
 
 ```typescript
-async function getStructuredData() {
-  const client = new OpenRouterClient({ apiKey: 'YOUR_KEY' });
-  try {
-    // Request JSON object
-    const jsonResponse = await client.chat({
-      prompt: 'Represent information about user John Doe (30 years old, email john.doe@example.com) as JSON.',
-      responseFormat: { type: 'json_object' },
-      // strictJsonParsing: true, // Throw error if parsing/validation fails
-    });
-    console.log('JSON Object:', jsonResponse); // Should be a JS object
+// TypeScript Example
+import OpenRouter from 'openrouter-kit';
 
-    // Request JSON according to schema
+async function getStructuredData() {
+  const client = new OpenRouter({ apiKey: 'YOUR_KEY' });
+  try {
     const userSchema = {
       type: "object",
-      properties: {
-        name: { type: "string" },
-        age: { type: "integer" },
-        email: { type: "string", format: "email" }
-      },
+      properties: { name: { type: "string"}, age: {type: "number"} },
       required: ["name", "age"]
     };
-
-    const schemaResponse = await client.chat({
-        prompt: 'Create JSON for user Jane Smith, 25 years old, jane@test.com',
-        responseFormat: {
-            type: 'json_schema',
-            json_schema: {
-                name: 'User',
-                schema: userSchema
-            }
-        }
+    const userData = await client.chat({
+      prompt: 'Generate user data for Bob (age 42, bob@domain.com) according to the schema.',
+      responseFormat: {
+        type: 'json_schema',
+        json_schema: { name: 'UserData', schema: userSchema }
+      },
+      // strictJsonParsing: true // Optional: throw error on invalid JSON/schema
     });
-     console.log('JSON Schema Response:', schemaResponse); // Should be a JS object matching the schema
 
+    if (userData) {
+      console.log('Structured User Data:', userData);
+    } else {
+      console.log('Model did not return valid JSON conforming to the schema.');
+    }
   } catch (error: any) {
     console.error('Error:', error.message);
   } finally {
-    // Again, important for long-running applications
     await client.destroy();
   }
 }
@@ -417,69 +492,48 @@ getStructuredData();
 
 ### ⚠️ Error Handling
 
-The library uses custom error classes inheriting from `OpenRouterError`. This allows for easy differentiation between error types:
-
-*   `APIError`: Error from the OpenRouter API (status >= 400).
-*   `ValidationError`: Validation error (config, arguments, response, JSON).
-*   `NetworkError`: Network error.
-*   `AuthenticationError`: Invalid API key (usually 401).
-*   `AuthorizationError`: Invalid `accessToken` (JWT) (usually 401).
-*   `AccessDeniedError`: Access forbidden (roles/policies) (usually 403).
-*   `ToolError`: Error during tool `execute` function (usually 500).
-*   `RateLimitError`: Request limit exceeded (usually 429).
-*   `TimeoutError`: Request timeout (usually 408).
-*   `ConfigError`: Invalid library configuration.
-*   `SecurityError`: General security error (dangerous arguments, etc.).
-
-You can catch specific error types or use the `code` field (e.g., `error.code === ErrorCode.RATE_LIMIT_ERROR`).
+Catch errors using `try...catch` and check the error type via `instanceof` or the `error.code` property (see `ErrorCode` enum).
 
 ```typescript
-import { RateLimitError, ValidationError, ErrorCode } from 'openrouter-kit';
+import { OpenRouterError, RateLimitError, ValidationError, ErrorCode } from 'openrouter-kit';
 
-// ...
 try {
-  // ... call client.chat() ...
+  // ... client.chat() call ...
 } catch (error: any) {
   if (error instanceof RateLimitError) {
-    console.warn(`Rate limit reached. Retry after ${Math.ceil((error.details?.timeLeft || 0) / 1000)} sec.`);
-  } else if (error instanceof ValidationError) {
-    console.error(`Validation error: ${error.message}`, error.details);
-  } else if (error.code === ErrorCode.AUTHENTICATION_ERROR) {
-     console.error(`Authentication error: check your API key.`);
+    const retryAfter = Math.ceil((error.details?.timeLeft || 0) / 1000);
+    console.warn(`Rate limit hit! Try again in ${retryAfter} seconds.`);
+  } else if (error.code === ErrorCode.VALIDATION_ERROR) {
+    console.error(`Validation failed: ${error.message}`, error.details);
+  } else if (error instanceof OpenRouterError) { // Catch other library errors
+    console.error(`OpenRouter Kit Error (${error.code}): ${error.message}`);
   } else {
-    console.error(`Unhandled error [${error.code || 'UNKNOWN'}]: ${error.message}`);
+    console.error(`Unknown error: ${error.message}`);
   }
 }
 ```
 
-You can also subscribe to the client's `'error'` event:
-
-```typescript
-client.on('error', (error) => {
-  console.error(`[Client Event Error] Code: ${error.code}, Message: ${error.message}`);
-});
-```
+You can also listen for global client errors:
+`client.on('error', (error) => { /* ... */ });`
 
 ### 🌐 Proxy
 
-Configure a proxy via the `proxy` option in the client configuration:
+Configure a proxy in the client options:
 
 ```typescript
-// URL string format
-const client1 = new OpenRouterClient({
+// TypeScript Example
+import OpenRouter from 'openrouter-kit';
+
+// String URL format
+const client1 = new OpenRouter({
   apiKey: 'YOUR_KEY',
-  proxy: 'http://user:password@your-proxy-server:8080'
+  proxy: 'http://user:pass@your-proxy.com:8080'
 });
 
 // Object format
-const client2 = new OpenRouterClient({
+const client2 = new OpenRouter({
   apiKey: 'YOUR_KEY',
-  proxy: {
-    host: 'your-proxy-server.com',
-    port: 8080,
-    // user: 'proxy_user', // optional
-    // pass: 'proxy_pass'  // optional
-  }
+  proxy: { host: 'proxy.example.com', port: 8888, user: 'usr', pass: 'pwd' }
 });
 ```
 

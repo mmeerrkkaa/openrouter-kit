@@ -1,31 +1,4 @@
 // Path: client.ts
-/**
- * Main client for interacting with OpenRouter API.
- * Provides methods for sending chat requests, managing history,
- * calling tools, and configuring security.
- *
- * @example
- * import { OpenRouterClient } from 'openrouter-kit'; // or your path
- *
- * const client = new OpenRouterClient({
- *   apiKey: 'YOUR_OPENROUTER_API_KEY',
- *   // Optionally override default referer/title:
- *   // referer: 'https://my-amazing-app.com',
- *   // title: 'My Amazing App'
- * });
- *
- * async function main() {
- *   try {
- *     const response = await client.chat({ prompt: 'Hello, world!' });
- *     console.log('Model response:', response);
- *   } catch (error) {
- *     console.error('Error:', error);
- *   }
- * }
- *
- * main();
- */
-
 import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import {
@@ -61,7 +34,6 @@ import {
     NetworkError
 } from './utils/error';
 import * as jsonUtils from './utils/json-utils';
-// import { validateJsonSchema } from './utils/json-utils';
 import { Logger } from './utils/logger';
 import {
   API_ENDPOINT,
@@ -82,7 +54,6 @@ export class OpenRouterClient {
   private apiEndpoint: string;
   private model: string;
   private debug: boolean;
-  // Define the type for the proxy object where port is always a number internally
   private proxy: string | { host: string; port: number; user?: string; pass?: string } | null;
   private headers: Record<string, string>;
   private historyManager: HistoryManager;
@@ -98,32 +69,7 @@ export class OpenRouterClient {
   private clientEventEmitter: SimpleEventEmitter;
   private axiosConfig?: AxiosRequestConfig;
 
-  /**
-   * Creates an OpenRouter Kit instance.
-   *
-   * @param config - Client configuration.
-   * @param config.apiKey - Your OpenRouter API key (required).
-   * @param config.apiEndpoint - OpenRouter API URL. Default is the official endpoint.
-   * @param config.model - Default model for requests.
-   * @param config.debug - Enable verbose logging mode.
-   * @param config.proxy - Proxy settings (URL string or object { host, port: number | string, user?, pass? }).
-   * @param config.referer - HTTP-Referer header. Overrides the default value.
-   * @param config.title - X-Title header. Overrides the default value.
-   * @param config.historyStorage - History storage type ('memory' or 'disk').
-   * @param config.historyAutoSave - Auto-save history for 'disk'.
-   * @param config.historyTtl - TTL for history entries (ms).
-   * @param config.historyCleanupInterval - History cleanup interval (ms).
-   * @param config.providerPreferences - OpenRouter provider preferences settings.
-   * @param config.modelFallbacks - List of fallback models.
-   * @param config.responseFormat - Default response format.
-   * @param config.security - Security configuration object.
-   * @param config.strictJsonParsing - Strict JSON validation in responses. Default is false.
-   * @param config.axiosConfig - Additional Axios settings to merge.
-   *
-   * @throws {ConfigError} If configuration is invalid.
-   */
   constructor(config: OpenRouterConfig) {
-    // Validate configuration before use (validation handles port string check)
     validateConfig(config);
 
     this.debug = config.debug ?? false;
@@ -138,8 +84,7 @@ export class OpenRouterClient {
     this.model = config.model || DEFAULT_MODEL;
     this.axiosConfig = config.axiosConfig;
 
-    // Process and assign proxy, converting port to number if needed
-    let processedProxy: typeof this.proxy = null; // Initialize with the target type
+    let processedProxy: typeof this.proxy = null;
     if (config.proxy) {
         if (typeof config.proxy === 'string') {
             processedProxy = config.proxy;
@@ -147,31 +92,26 @@ export class OpenRouterClient {
             let portNumber: number;
             if (typeof config.proxy.port === 'string') {
                 portNumber = parseInt(config.proxy.port, 10);
-                // Validation should have caught non-numeric strings, but double-check
                 if (isNaN(portNumber)) {
                     this.logger.error(`Internal validation inconsistency: Proxy port string '${config.proxy.port}' failed parsing after validation. Disabling proxy.`);
-                    portNumber = 0; // Assign a dummy value, proxy will be set to null below
+                    portNumber = 0;
                 }
             } else {
-                // It must be a number due to validation
                 portNumber = config.proxy.port;
             }
 
-            // Only assign if port is valid (validation checks range 1-65535)
             if (portNumber > 0) {
                 processedProxy = {
-                    ...config.proxy, // Copy host, user, pass
-                    port: portNumber, // Assign the guaranteed number
+                    ...config.proxy,
+                    port: portNumber,
                 };
             } else {
-                 // Logged error above, ensure proxy is null
                  processedProxy = null;
             }
         }
     }
-    this.proxy = processedProxy; // Assign the processed proxy value
+    this.proxy = processedProxy;
 
-    // Form headers
     this.headers = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${this.apiKey}`,
@@ -184,7 +124,6 @@ export class OpenRouterClient {
 
     this.strictJsonParsing = config.strictJsonParsing ?? false;
 
-    // HistoryManager setup
     const historyStorage: HistoryStorageType = config.historyStorage || 'memory';
     const chatsFolder = DEFAULT_CHATS_FOLDER;
     const maxHistory = MAX_HISTORY_ENTRIES;
@@ -200,19 +139,16 @@ export class OpenRouterClient {
     });
     this.logger.log(`History manager initialized: type=${historyStorage}, folder=${chatsFolder}, maxEntries=${maxHistory}`);
 
-    // Other options
     this.providerPreferences = config.providerPreferences || undefined;
     this.modelFallbacks = config.modelFallbacks || [];
     this.enableReasoning = config.enableReasoning || false;
     this.webSearch = config.webSearch || false;
     this.defaultResponseFormat = config.responseFormat || null;
 
-    // Initialize SecurityManager
     if (config.security) {
       this.securityManager = new SecurityManager(config.security, this.debug);
       this.logger.log('SecurityManager initialized.');
       if (this.debug) {
-        // Clone security config and redact secret for logging
         const secureConfigLog = { ...config.security };
         if (secureConfigLog.userAuthentication?.jwtSecret) {
              secureConfigLog.userAuthentication = { ...secureConfigLog.userAuthentication, jwtSecret: '***REDACTED***' };
@@ -224,20 +160,11 @@ export class OpenRouterClient {
       this.logger.log('SecurityManager not used (security configuration missing).');
     }
 
-    // Create Axios instance AFTER initializing all fields used in interceptors
     this.axiosInstance = this._createAxiosInstance();
 
     this.logger.log('OpenRouter Kit successfully initialized.');
   }
 
-  /**
-   * Creates and configures an Axios instance for HTTP requests.
-   * Applies proxy, headers, and interceptors for logging.
-   * Merges standard configuration with `this.axiosConfig`.
-   *
-   * @returns {AxiosInstance} Configured Axios instance.
-   * @private
-   */
   private _createAxiosInstance(): AxiosInstance {
     const baseAxiosConfig: AxiosRequestConfig = {
         baseURL: this.apiEndpoint,
@@ -318,14 +245,6 @@ export class OpenRouterClient {
     return axiosInstance;
   }
 
-  /**
-   * Sends a request to the OpenRouter model to get a response in chat.
-   * Handles message preparation, request building, API interaction, and response processing.
-   *
-   * @param options - Request parameters.
-   * @returns {Promise<any>} Promise resolving with the model's response (string or parsed object).
-   * @throws {OpenRouterError} or its subclasses if an error occurs.
-   */
   async chat(options: OpenRouterRequestOptions): Promise<any> {
     const startTime = Date.now();
     if (!options.customMessages && !options.prompt) {
@@ -406,7 +325,7 @@ export class OpenRouterClient {
 
       if (options.stream) {
           this.logger.warn('Streaming (stream: true) not yet implemented.');
-          return ''; // Temporarily return empty string for streams
+          return '';
       }
 
       const response = await this._sendRequest(requestBody);
@@ -430,8 +349,6 @@ export class OpenRouterClient {
     }
   }
 
-
-  /** @private */
   private async _prepareMessages(params: {
     user?: string; group?: string | null; prompt: string; systemPrompt?: string | null; customMessages?: Message[] | null;
   }): Promise<Message[]> {
@@ -482,7 +399,6 @@ export class OpenRouterClient {
     return messages;
   }
 
-  /** @private */
   private _buildRequestBody(params: {
     messages: Message[];
     tools?: Tool[] | null;
@@ -557,7 +473,6 @@ export class OpenRouterClient {
     return body;
   }
 
-  /** @private */
   private async _sendRequest(requestBody: Record<string, any>): Promise<AxiosResponse<OpenRouterResponse>> {
      this.logger.debug('Sending request to API:', requestBody);
      try {
@@ -567,7 +482,6 @@ export class OpenRouterClient {
      }
   }
 
-   /** @private */
    private async _addHistoryEntry(
        user: string | undefined,
        group: string | null | undefined,
@@ -611,7 +525,6 @@ export class OpenRouterClient {
        }
    }
 
-   /** @private */
    private _parseAndValidateJsonResponse(
        rawContent: string,
        requestedFormat: ResponseFormat,
@@ -646,7 +559,6 @@ export class OpenRouterClient {
        }
    }
 
-   /** @private */
    private async _processResponse(params: {
        response: AxiosResponse<OpenRouterResponse>;
        requestBody: Record<string, any>;
@@ -678,14 +590,11 @@ export class OpenRouterClient {
        const choice = responseData.choices[0];
        const assistantMessage = choice.message;
 
-       // Find the last user message for history context
        const lastUserMessage = requestBody.messages?.slice().reverse().find((m: Message) => m.role === 'user');
        const promptForHistory = lastUserMessage?.content || prompt || "<prompt not found>";
 
-       // --- Handle tool calls ---
        if (assistantMessage.tool_calls?.length && tools?.length) {
            this.logger.log(`Found ${assistantMessage.tool_calls.length} tool calls. Starting ToolHandler...`);
-           // Add the assistant message *requesting* the tool call to history
            await this._addHistoryEntry(user, group, promptForHistory, assistantMessage);
 
            try {
@@ -701,7 +610,6 @@ export class OpenRouterClient {
                    parallelCalls: requestBody.parallel_tool_calls ?? true
                });
                this.logger.log('Tool processing and final response received.');
-               // Note: ToolHandler adds tool results and final assistant response to history.
                return finalResponseAfterTools;
            } catch (toolHandlerError) {
                 const mappedError = mapError(toolHandlerError);
@@ -710,9 +618,8 @@ export class OpenRouterClient {
            }
        }
 
-       // --- Handle regular response ---
        const rawContent = assistantMessage.content;
-       let finalResult: any = ''; // Default to empty string
+       let finalResult: any = '';
 
        if (rawContent !== null && rawContent !== undefined) {
            if (typeof rawContent !== 'string') {
@@ -732,23 +639,18 @@ export class OpenRouterClient {
             this.logger.warn(`Received null or undefined content from assistant. Finish reason: ${choice.finish_reason}`);
        }
 
-       // Add the regular response to history
        await this._addHistoryEntry(user, group, promptForHistory, finalResult);
 
        return finalResult;
    }
 
-  /** @private */
   private _handleError(error: OpenRouterError): void {
     this.clientEventEmitter.emit('error', error);
   }
 
-  /** @private */
   private _getHistoryKey(user: string, group?: string | null): string {
     return group ? `group:${group}_user:${user}` : `user:${user}`;
   }
-
-  // --- Public methods ---
 
   public getHistoryManager(): HistoryManager { return this.historyManager; }
 
@@ -786,15 +688,6 @@ export class OpenRouterClient {
     this.logger.log('API key successfully updated.');
   }
 
-  /**
-   * Creates JWT access token for user (requires configured SecurityManager with JWT).
-   *
-   * @param userInfo - User info to include in token (excluding `expiresAt`).
-   * @param expiresIn - Token lifetime (e.g., '24h', 3600). Default handled by SecurityManager.
-   * @returns {string} Generated JWT token.
-   * @throws {ConfigError} If SecurityManager not configured or not supporting JWT.
-   * @throws {SecurityError} If token creation error occurred.
-   */
   public createAccessToken(userInfo: Omit<UserAuthInfo, 'expiresAt'>, expiresIn?: string | number): string {
     if (!this.securityManager) {
         throw new ConfigError('Cannot create token: SecurityManager not configured.');
@@ -808,7 +701,6 @@ export class OpenRouterClient {
   public on(event: string, handler: (event: any) => void): this;
   public on(event: string, handler: (event: any) => void): this {
     if (event === 'error') {
-        // Explicit cast for the specific 'error' event handler type
         this.clientEventEmitter.on(event, handler as (error: OpenRouterError) => void);
         this.logger.debug(`Added client event handler for: ${event}`);
     } else if (this.securityManager) {
@@ -824,7 +716,6 @@ export class OpenRouterClient {
    public off(event: string, handler: (event: any) => void): this;
    public off(event: string, handler: (event: any) => void): this {
        if (event === 'error') {
-           // Explicit cast for the specific 'error' event handler type
            this.clientEventEmitter.off(event, handler as (error: OpenRouterError) => void);
            this.logger.debug(`Removed client event handler for: ${event}`);
        } else if (this.securityManager) {
@@ -848,9 +739,6 @@ export class OpenRouterClient {
        this.logger.log('OpenRouterClient successfully destroyed.');
    }
 
-  /**
-   * @deprecated Direct call `handleToolCalls` is deprecated. Tool processing now happens automatically inside `chat`.
-   */
   public async handleToolCalls(params: {
     message: Message & { tool_calls?: any[] };
     messages: Message[];
@@ -877,17 +765,16 @@ export class OpenRouterClient {
      }
 
      try {
-         // Ensure ToolHandler.handleToolCalls aligns with expected parameters
          return await ToolHandler.handleToolCalls({
-           message: params.message as Message & { tool_calls: ToolCall[] }, // Type assertion after check
+           message: params.message as Message & { tool_calls: ToolCall[] },
            messages: params.messages,
-           client: this, // Pass the client instance
-           debug: params.debug ?? this.debug, // Use provided debug or client's default
-           tools: params.tools ?? [], // Ensure tools is an array
-           securityManager: this.securityManager || undefined, // Pass security manager if exists
-           userInfo: userInfo, // Pass resolved userInfo
+           client: this,
+           debug: params.debug ?? this.debug,
+           tools: params.tools ?? [],
+           securityManager: this.securityManager || undefined,
+           userInfo: userInfo,
            logger: this.logger.withPrefix('ToolHandler(Deprecated)'),
-           parallelCalls: true // Default to parallel for deprecated method
+           parallelCalls: true
          });
      } catch (error) {
           const mappedError = mapError(error);
