@@ -8,20 +8,14 @@ import Ajv, { ErrorObject, SchemaObject } from 'ajv';
 import { ValidationError } from './error';
 import { Logger } from './logger';
 
-// Default logger for this module
 const defaultLogger = new Logger({ debug: false, prefix: 'JsonUtils' });
 
-/**
- * Options for JSON utility functions.
- */
+
 interface JsonUtilsOptions {
-    /** Logger instance for output messages. */
     logger?: Logger;
-    /** Provided Ajv instance for schema validation. */
     ajvInstance?: Ajv;
 }
 
-// Global instances (can be overridden through setJsonUtilsLogger/options)
 let globalAjv: Ajv;
 let globalLogger: Logger = defaultLogger;
 
@@ -87,38 +81,39 @@ export function safeParse<T = any>(jsonString: string, fallback: T, options?: Js
 
 /**
  * Parses a JSON string. In case of parsing error or if input is not a string,
- * throws a `ValidationError`.
+ * throws a `ValidationError`. Handles empty string as empty object specifically for tool arguments.
  *
  * @param jsonString - String to parse.
  * @param entityName - Entity name (e.g., "arguments", "API response") to use in error message.
  * @param options - Options including logger.
  * @returns Parsed object.
- * @throws {ValidationError} If parsing fails or input is not a string.
- * @example
- * try {
- *   const args = parseOrThrow('{"query": "test"}', 'arguments');
- *   console.log(args.query); // "test"
- * } catch (e) {
- *   console.error(e.message); // "Error parsing arguments JSON: ..."
- * }
+ * @throws {ValidationError} If parsing fails or input is not a string (unless it's an empty string for arguments).
  */
 export function parseOrThrow(jsonString: string, entityName: string = 'JSON', options?: JsonUtilsOptions): any {
     const logger = getLogger(options);
-    
+
     if (typeof jsonString !== 'string') {
         const error = new ValidationError(`Invalid input for ${entityName}: expected string, got ${typeof jsonString}`);
         logger.error(`parseOrThrow failed: ${error.message}`);
         throw error;
     }
 
+    const trimmedString = jsonString.trim();
+
+    if ((trimmedString === '' || trimmedString === '{}') && entityName.includes('arguments')) {
+        logger.debug(`Parsed ${entityName}: empty string or '{}' treated as empty object.`);
+        return {};
+    }
+
+    // If the string is empty, but these are NOT arguments, we throw an error
+    if (trimmedString === '') {
+        const error = new ValidationError(`Error parsing ${entityName}: empty or whitespace string provided`);
+        logger.error(error.message);
+        throw error;
+    }
+
     try {
-        // Check for empty string
-        if (jsonString.trim() === '') {
-            const error = new ValidationError(`Error parsing ${entityName}: empty or whitespace string provided`);
-            logger.error(error.message);
-            throw error;
-        }
-        const result = JSON.parse(jsonString);
+        const result = JSON.parse(trimmedString);
         logger.debug(`Successfully parsed ${entityName} JSON`);
         return result;
     } catch (error) {
@@ -126,18 +121,18 @@ export function parseOrThrow(jsonString: string, entityName: string = 'JSON', op
         if (error instanceof ValidationError) {
             throw error;
         }
-        
+
         // Otherwise, create ValidationError with original message
         const message = error instanceof Error ? error.message : String(error);
         const wrappedError = new ValidationError(`Error parsing ${entityName} JSON: ${message}`);
         logger.error(`parseOrThrow failed: ${wrappedError.message}`);
-        
+
         // Include original error details
         wrappedError.details = {
             original: error,
-            input: jsonString.length > 200 ? `${jsonString.substring(0, 200)}...` : jsonString
+            input: trimmedString.length > 200 ? `${trimmedString.substring(0, 200)}...` : trimmedString
         };
-        
+
         throw wrappedError;
     }
 }
@@ -348,10 +343,7 @@ export function isValidJsonString(jsonString: string, options?: JsonUtilsOptions
     }
 }
 
-/**
- * Sets the global logger instance for default use by JSON utilities.
- * @param logger - Logger instance that conforms to `Logger` interface.
- */
+
 export function setJsonUtilsLogger(logger: Logger) {
     if (logger && typeof logger.debug === 'function') {
         globalLogger = logger;
