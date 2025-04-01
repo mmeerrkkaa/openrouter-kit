@@ -16,9 +16,9 @@
     "api",
     "client",
     "llm",
+    "ии",
     "ai"
   ],
-  "author": "",
   "license": "MIT",
   "dependencies": {
     "jsonwebtoken": "^9.0.0",
