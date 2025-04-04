@@ -1,7 +1,38 @@
-// Path: src/types/index.ts
+/**
+ * Path: src/types/index.ts
+ */
 import type { AxiosRequestConfig } from 'axios';
 import type { ISecurityManager } from '../security/types';
-import type { Logger } from '../utils/logger'; // Import Logger type
+import type { Logger } from '../utils/logger'; 
+
+
+// --- Plugin Interface ---
+export interface OpenRouterPlugin {
+  init(client: import('../client').OpenRouterClient): Promise<void> | void;
+}
+
+// --- Middleware Types ---
+export interface MiddlewareContext {
+  request: {
+    options: import('../types').OpenRouterRequestOptions;
+  };
+  response?: {
+    result?: import('../types').ChatCompletionResult;
+    rawResponse?: any;
+    error?: any;
+  };
+  metadata?: Record<string, any>;
+}
+
+export type MiddlewareFunction = (ctx: MiddlewareContext, next: () => Promise<void>) => Promise<void>;
+
+// --- Storage Adapter Interface ---
+export interface IHistoryStorage {
+  load(key: string): Promise<Message[]>;
+  save(key: string, messages: Message[]): Promise<void>;
+  delete(key: string): Promise<void>;
+  listKeys(): Promise<string[]>;
+}
 
 // --- Core Message and Tool Types ---
 
@@ -222,6 +253,11 @@ export interface OpenRouterConfig {
   enableCostTracking?: boolean; // Optional: Enable cost calculation (default: false)
   priceRefreshIntervalMs?: number; // Optional: How often to refresh model prices (default: 6 hours)
   initialModelPrices?: Record<string, ModelPricingInfo>; // Optional: Provide initial prices to avoid first fetch
+
+  /**
+   * Optional custom history storage adapter (memory, disk, Redis, etc.)
+   */
+  historyAdapter?: import('../types').IHistoryStorage;
 }
 
 export interface OpenRouterRequestOptions {
