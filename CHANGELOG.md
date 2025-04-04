@@ -1,21 +1,23 @@
 # Changelog
 
-## Feature/Library-Improvements (Current)
+### Major Refactoring: Pluggable History Storage
 
-### Added
-- New `CostTracker` module for tracking API usage costs
-  - Automatically fetches model pricing from OpenRouter API
-  - Calculates costs for each request based on token usage
-  - Configurable price refresh interval
-  - Support for manually providing model prices
+- **Removed legacy `HistoryManager` implementation.**
+- Introduced a new **adapter-based architecture** for chat history storage.
+- Added `IHistoryStorage` interface for pluggable storage backends.
+- Implemented built-in adapters:
+  - `MemoryHistoryStorage` (in-memory)
+  - `DiskHistoryStorage` (JSON files on disk)
+- Created `UnifiedHistoryManager` that works with any `IHistoryStorage` adapter.
+- `OpenRouterClient` now uses `UnifiedHistoryManager` exclusively.
+- **Removed** `historyStorage` and related options from config.
+- **Added** new config option: `historyAdapter?: IHistoryStorage` to inject any custom storage backend (e.g., Redis, MongoDB, API).
+- Updated all internal calls to use the new manager.
+- Updated README to reflect the new architecture.
 
-### Enhanced
-- Extended `OpenRouterConfig` interface with cost tracking options
-  - `enableCostTracking`: Toggle cost tracking functionality
-  - `priceRefreshIntervalMs`: Configure how often to refresh pricing data
-  - `initialModelPrices`: Provide initial prices to avoid API call
+### Other Improvements
 
-### Modified
-- Improved client configuration and initialization
-- Enhanced error handling and type definitions
-- Updated JSON utilities and response handling 
+- Cleaned up `OpenRouterClient` constructor, removed legacy code.
+- Improved comments and code clarity.
+- Updated Russian documentation (`README.ru.md`) to describe the new plugin-based history system.
+- Prepared the codebase for future plugin system and middleware improvements.

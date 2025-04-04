@@ -88,7 +88,11 @@ export class OpenRouterClient {
   private debug: boolean;
   private proxy: string | { host: string; port: number; user?: string; pass?: string } | null;
   private headers: Record<string, string>;
-  private historyManager: HistoryManager;
+  // legacy historyManager removed
+  /**
+   * Optional unified history manager with pluggable storage adapter
+   */
+  private unifiedHistoryManager?: import('./history/unified-history-manager').UnifiedHistoryManager;
   private providerPreferences?: ProviderPreferences;
   private modelFallbacks: string[];
   private enableReasoning: boolean;
@@ -102,6 +106,8 @@ export class OpenRouterClient {
   private axiosConfig?: AxiosRequestConfig;
   private defaultMaxToolCalls: number;
   private costTracker: CostTracker | null;
+  private plugins: import('./types').OpenRouterPlugin[] = [];
+  private middlewares: import('./types').MiddlewareFunction[] = [];
   private apiBaseUrl: string;
 
   constructor(config: OpenRouterConfig) {
@@ -112,6 +118,18 @@ export class OpenRouterClient {
     jsonUtils.setJsonUtilsLogger(this.logger.withPrefix('JsonUtils'));
     this.clientEventEmitter = new SimpleEventEmitter();
 
+    // Initialize history manager: unified with adapter or legacy
+    if (config.historyAdapter) {
+      this.logger.log('Using UnifiedHistoryManager with custom adapter');
+      const { UnifiedHistoryManager } = require('./history/unified-history-manager');
+      this.unifiedHistoryManager = new UnifiedHistoryManager(config.historyAdapter, {
+        ttlMs: config.historyTtl,
+        cleanupIntervalMs: config.historyCleanupInterval,
+        autoSave: config.historyAutoSave,
+      });
+    } else {
+      this.logger.log('Legacy HistoryManager removed');
+    }
     this.logger.log('Initializing OpenRouter Kit...');
 
     this.apiKey = config.apiKey;
@@ -191,17 +209,6 @@ export class OpenRouterClient {
      const chatsFolder = config.historyStorage === 'disk' ? (config.chatsFolder || DEFAULT_CHATS_FOLDER) : '';
      const maxHistory = config.maxHistoryEntries || (MAX_HISTORY_ENTRIES * 2);
 
-     this.historyManager = new HistoryManager({
-       storageType: historyStorage,
-       chatsFolder: chatsFolder,
-       maxHistoryEntries: maxHistory,
-       debug: this.debug,
-       ttl: config.historyTtl,
-       cleanupInterval: config.historyCleanupInterval,
-       autoSaveOnExit: config.historyAutoSave,
-       logger: this.logger.withPrefix('HistoryManager')
-     });
-     this.logger.log(`History manager initialized: type=${historyStorage}, folder=${chatsFolder || 'N/A'}, maxMessages=${maxHistory}`);
 
     this.providerPreferences = config.providerPreferences || undefined;
     this.modelFallbacks = config.modelFallbacks || [];
@@ -339,8 +346,28 @@ export class OpenRouterClient {
     return axiosInstance;
   }
 
-  // --- ИСПРАВЛЕННЫЙ МЕТОД CHAT ---
+
   async chat(options: OpenRouterRequestOptions): Promise<ChatCompletionResult> {
+    const ctx: import('./types').MiddlewareContext = {
+      request: { options },
+      metadata: {}
+    };
+
+    await this._runMiddlewares(ctx, async () => {
+      try {
+        const result = await this._chatInternal(ctx.request.options);
+        ctx.response = { ...(ctx.response || {}), result };
+      } catch (err) {
+        ctx.response = { ...(ctx.response || {}), error: err };
+      }
+    });
+
+    if (ctx.response?.error) throw ctx.response.error;
+    if (ctx.response?.result) return ctx.response.result;
+    throw new Error('Chat middleware chain did not produce a result');
+  }
+
+  private async _chatInternal(options: OpenRouterRequestOptions): Promise<ChatCompletionResult> {
     const startTime = Date.now();
     if (!options.customMessages && !options.prompt) {
         throw new ConfigError("'prompt' or 'customMessages' must be provided in options");
@@ -419,7 +446,7 @@ export class OpenRouterClient {
             const historyKey = this._getHistoryKey(user, group);
             try {
                 // Get history returns a COPY, so it's safe to store
-                conversationHistory = await this.historyManager.getHistory(historyKey);
+                conversationHistory = await this.unifiedHistoryManager!.getHistory(historyKey);
                 this.logger.debug(`Loaded ${conversationHistory.length} messages from history for key '${historyKey}'.`);
             } catch (histError) {
                 this.logger.error(`Error loading history for key '${historyKey}':`, histError);
@@ -480,7 +507,7 @@ export class OpenRouterClient {
 
             if (messagesToSave.length > 0) {
                 // AddMessages handles trimming internally
-                await this.historyManager.addMessages(historyKey, messagesToSave);
+                await this.unifiedHistoryManager!.addMessages(historyKey, messagesToSave);
                 this.logger.debug(`Saved conversation turn (${messagesToSave.length} messages) to history for key '${historyKey}'.`);
             } else {
                 this.logger.debug(`No new messages to save for history key '${historyKey}'.`);
@@ -515,7 +542,7 @@ export class OpenRouterClient {
           
            const messagesToSaveOnError = messagesForApi.slice(initialHistoryLength);
            if (messagesToSaveOnError.length > 0) {
-                this.historyManager.addMessages(historyKey, messagesToSaveOnError)
+                this.unifiedHistoryManager!.addMessages(historyKey, messagesToSaveOnError)
                     .catch(histErr => this.logger.error(`Failed to save partial history on error for key ${historyKey}:`, histErr));
            }
        }
@@ -566,7 +593,7 @@ export class OpenRouterClient {
        const historyKey = this._getHistoryKey(user, group);
        this.logger.warn(`_prepareMessages loading history for key '${historyKey}' (ideally should be pre-loaded by chat()).`);
        try {
-           const history = await this.historyManager.getHistory(historyKey);
+           const history = await this.unifiedHistoryManager!.getHistory(historyKey);
            if (history.length > 0) {
                this.logger.debug(`History loaded for key '${historyKey}', records: ${history.length}. Filtering...`);
                const filteredHistory = this._filterHistoryForApi(history);
@@ -918,9 +945,10 @@ export class OpenRouterClient {
     return key;
   }
 
-  // --- Public methods ---
-  public getHistoryManager(): HistoryManager { return this.historyManager; }
-  public getHistoryStorageType(): HistoryStorageType { return this.historyManager.getStorageType(); }
+  public getHistoryManager(): import('./history/unified-history-manager').UnifiedHistoryManager | HistoryManager {
+    return this.unifiedHistoryManager!;
+  }
+  public getHistoryStorageType(): HistoryStorageType { return 'memory'; }
   public isDebugMode(): boolean { return this.debug; }
   public getSecurityManager(): SecurityManager | null { return this.securityManager; }
   public isSecurityEnabled(): boolean { return this.securityManager !== null; }
@@ -1047,8 +1075,8 @@ export class OpenRouterClient {
 
    public async destroy(): Promise<void> {
        this.logger.log('Destroying OpenRouterClient...');
-       if (this.historyManager) {
-           await this.historyManager.destroy();
+       if (this.unifiedHistoryManager) {
+           await this.unifiedHistoryManager.destroy();
            this.logger.debug('HistoryManager destroyed.');
        }
        if (this.securityManager) {
@@ -1115,6 +1143,40 @@ export class OpenRouterClient {
           this.logger.error(`[handleToolCalls] Error during tool processing: ${mappedError.message}`, mappedError.details);
           throw mappedError;
      }
+  }
+
+  /**
+   * Returns the active history manager (unified or legacy)
+   */
+  // duplicate getHistoryManager removed
+
+  public async use(plugin: import('./types').OpenRouterPlugin): Promise<void> {
+    if (!plugin || typeof plugin.init !== 'function') {
+        throw new ConfigError('Invalid plugin: missing init() method');
+    }
+    await plugin.init(this);
+    this.plugins.push(plugin);
+    this.logger.log(`Plugin registered: ${plugin.constructor?.name || 'anonymous plugin'}`);
+  }
+
+  public useMiddleware(fn: import('./types').MiddlewareFunction): void {
+    if (typeof fn !== 'function') {
+        throw new ConfigError('Middleware must be a function');
+    }
+    this.middlewares.push(fn);
+    this.logger.log(`Middleware registered: ${fn.name || 'anonymous'}`);
+  }
+
+  private async _runMiddlewares(ctx: import('./types').MiddlewareContext, coreFn: () => Promise<void>): Promise<void> {
+    const stack = this.middlewares.slice();
+    const dispatch = async (i: number): Promise<void> => {
+      if (i < stack.length) {
+        await stack[i](ctx, () => dispatch(i + 1));
+      } else {
+        await coreFn();
+      }
+    };
+    await dispatch(0);
   }
 
 } // End of OpenRouterClient class
