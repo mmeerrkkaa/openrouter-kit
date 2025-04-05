@@ -2,15 +2,15 @@
 
 [![npm version](https://badge.fury.io/js/openrouter-kit.svg)](https://badge.fury.io/js/openrouter-kit) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT) [![TypeScript](https://img.shields.io/badge/%3C/%3E-TypeScript-%230074C1.svg)](http://www.typescriptlang.org/)
 
-[🇷🇺 Русский](./README.md) | **🇬🇧 English**
+[🇷🇺 Русский](./README.ru.md) | **🇬🇧 English**
 ---
 
-**OpenRouter Kit** is a powerful, flexible, and user-friendly TypeScript/JavaScript library for interacting with the [OpenRouter API](https://openrouter.ai/). It significantly simplifies working with LLMs by providing a high-level API for chats, automatic management of conversation history, seamless handling of tool calls (function calling), a robust and configurable security module, and optional request cost tracking. It's ideal for building chatbots, AI agents, and integrating LLMs into your applications.
+**OpenRouter Kit** is a powerful, flexible, and user-friendly TypeScript/JavaScript library for interacting with the [OpenRouter API](https://openrouter.ai/). It significantly simplifies working with LLMs by providing a high-level API for chats, automatic management of conversation history (**when an adapter is configured**), seamless handling of tool calls (function calling), a robust and configurable security module, and optional request cost tracking. It's ideal for building chatbots, AI agents, and integrating LLMs into your applications.
 
 ## Why Use OpenRouter Kit?
 
 *   **Simplicity:** Complex API interactions, history management, and tool handling are hidden behind the simple `client.chat()` method.
-*   **Flexibility:** Configure models, generation parameters, history storage, security, and much more.
+*   **Flexibility:** Configure models, generation parameters, **history storage (requires adapter)**, security, and much more.
 *   **Security:** The built-in security module helps protect your applications and users when using tools.
 *   **Extensibility:** Use plugins and middleware to add custom logic without modifying the core library.
 *   **Reliability:** Full TypeScript typings, predictable error handling, and resource management.
@@ -40,11 +40,11 @@
 
 *   **🤖 Universal Chat:** Simple and powerful API (`client.chat`) for interacting with any model available via OpenRouter.
     *   Returns a structured `ChatCompletionResult` object containing content (`content`), token usage information (`usage`), model used (`model`), number of tool calls (`toolCallsCount`), finish reason (`finishReason`), execution time (`durationMs`), request ID (`id`), and **calculated cost** (`cost`, optional).
-*   **📜 History Management:** Automatic loading, saving, and trimming of conversation history for each user or group.
+*   **📜 History Management:** **Requires `historyAdapter` configuration.** Automatic loading, saving, and trimming of conversation history for each user or group, if `user` is passed to `client.chat()`.
     *   Flexible history system based on **adapters** (`IHistoryStorage`).
     *   Includes built-in adapters for memory (`MemoryHistoryStorage`) and disk (`DiskHistoryStorage`, JSON files).
-    *   Easily plug in custom adapters (Redis, MongoDB, API, etc.).
-    *   Configurable TTL, limits, and cleanup intervals.
+    *   Easily plug in custom adapters (Redis, MongoDB, API, etc.) or use the provided plugin (`createRedisHistoryPlugin`).
+    *   Configurable TTL, limits, and cleanup intervals via client options.
 *   **🛠️ Tool Handling (Function Calling):** Seamless integration for model-driven function calls.
     *   Define tools using the `Tool` interface and JSON Schema for argument validation.
     *   Automatic argument parsing, schema validation, and **security checks**.
@@ -62,7 +62,7 @@
     *   Periodic background updates of model prices from the OpenRouter API (`/models`).
     *   `getCreditBalance()` method to check the current credit balance.
     *   Access cached prices via `getModelPrices()`.
-*   **⚙️ Flexible Configuration:** Configure API key, default model, endpoint, timeouts, **proxy**, headers (`Referer`, `X-Title`), fallback models (`modelFallbacks`), response format (`responseFormat`), tool call limit (`maxToolCalls`), cost tracking (`enableCostTracking`), and many other parameters via `OpenRouterConfig`.
+*   **⚙️ Flexible Configuration:** Configure API key, default model, endpoint, timeouts, **proxy**, headers (`Referer`, `X-Title`), fallback models (`modelFallbacks`), response format (`responseFormat`), tool call limit (`maxToolCalls`), cost tracking (`enableCostTracking`), **history adapter (`historyAdapter`)**, and many other parameters via `OpenRouterConfig`.
 *   **💡 Typing:** Fully written in TypeScript, providing strong typing, autocompletion, and type checking during development.
 *   **🚦 Error Handling:** Clear hierarchy of custom errors (`APIError`, `ValidationError`, `SecurityError`, `RateLimitError`, `ToolError`, `ConfigError`, etc.) inheriting from `OpenRouterError`, with codes (`ErrorCode`) and details for convenient handling. `mapError` function for error normalization.
 *   **📝 Logging:** Built-in flexible logger (`Logger`) with prefix support and debug mode (`debug`).
@@ -91,10 +91,17 @@ pnpm add openrouter-kit
 
 ```typescript
 import OpenRouter from 'openrouter-kit';
-// or for CommonJS: const { OpenRouterClient } = require('openrouter-kit');
+// !!! IMPORTANT: Import the history adapter !!!
+// Use the correct path depending on your 'dist' structure
+// or main library export
+import { MemoryHistoryStorage } from 'openrouter-kit/dist/history/memory-storage';
+// Or, if you exported it from index.ts:
+// import { MemoryHistoryStorage } from 'openrouter-kit';
 
 const client = new OpenRouter({
   apiKey: process.env.OPENROUTER_API_KEY || 'sk-or-v1-...', // Use environment variables!
+  // !!! IMPORTANT: Provide an adapter to enable history !!!
+  historyAdapter: new MemoryHistoryStorage(),
   enableCostTracking: true, // Optional: enable cost calculation
   debug: false,             // Optional: enable detailed logs
 });
@@ -105,7 +112,7 @@ async function main() {
     const result = await client.chat({ // Get the ChatCompletionResult object
       prompt: 'Say hi to the world!',
       model: 'google/gemini-2.0-flash-001', // Optional: override the model
-      user: 'test-user-1', // Optional: for history saving
+      user: 'test-user-1', // Optional: User ID for history saving
     });
 
     console.log('--- Result ---');
@@ -125,29 +132,22 @@ async function main() {
     const balance = await client.getCreditBalance();
     console.log(`Credit Balance: Used $${balance.usage.toFixed(4)} out of $${balance.limit.toFixed(2)}`);
 
-    // Example: Get history (if user was specified)
+    // Example: Get history (will work since historyAdapter was provided)
     const historyManager = client.getHistoryManager(); // Get the history manager
-    // Ensure it's the UnifiedHistoryManager which has getHistory
-    if (historyManager && typeof historyManager.getHistory === 'function') {
-        // Key is formed internally, typically like 'user:test-user-1'
-        const history = await historyManager.getHistory('user:test-user-1');
-        console.log(`\nMessages stored in history for user:test-user-1: ${history.length}`);
+    if (historyManager) { // Ensure manager exists
+        const historyKey = `user:test-user-1`; // Example key
+        const history = await historyManager.getHistory(historyKey);
+        console.log(`\nMessages stored in history for ${historyKey}: ${history.length}`);
     }
 
   } catch (error: any) {
     // Error handling (see "Error Handling" section)
     console.error(`\n--- Error ---`);
     console.error(`Message: ${error.message}`);
-    if (error.code) {
-        console.error(`Error Code: ${error.code}`);
-    }
-    if (error.statusCode) {
-        console.error(`HTTP Status: ${error.statusCode}`);
-    }
-    if (error.details) {
-        console.error(`Details:`, error.details);
-    }
-    // console.error(error.stack); // Full stack trace for debugging
+    if (error.code) console.error(`Error Code: ${error.code}`);
+    if (error.statusCode) console.error(`HTTP Status: ${error.statusCode}`);
+    if (error.details) console.error(`Details:`, error.details);
+    // console.error(error.stack);
   } finally {
     console.log('\nShutting down and releasing resources...');
     // Important: release resources (timers, caches)
@@ -163,18 +163,35 @@ main();
 
 ```javascript
 const { OpenRouterClient } = require("openrouter-kit");
+// !!! IMPORTANT: Require the adapter from its file !!!
+const { MemoryHistoryStorage } = require("openrouter-kit/dist/history/memory-storage");
+// Or, if you exported it from index.js:
+// const { MemoryHistoryStorage } = require("openrouter-kit");
 
 const client = new OpenRouterClient({
   apiKey: process.env.OPENROUTER_API_KEY || 'sk-or-v1-...',
+  // !!! IMPORTANT: Provide an adapter to enable history !!!
+  historyAdapter: new MemoryHistoryStorage(),
   enableCostTracking: true, // Optional
 });
 
 async function main() {
   try {
-    const result = await client.chat({ prompt: 'Hello, world!' });
+    const result = await client.chat({
+        prompt: 'Hello, world!',
+        user: 'commonjs-user' // Specify user to save history
+    });
     console.log('Model Response:', result.content);
     console.log('Usage:', result.usage);
-    console.log('Cost:', result.cost); // null if enableCostTracking: false
+    console.log('Cost:', result.cost);
+
+    // Get history
+    const historyManager = client.getHistoryManager();
+    if (historyManager) {
+        const history = await historyManager.getHistory('user:commonjs-user'); // Key formed internally
+        console.log(`\nHistory for 'user:commonjs-user': ${history.length} messages`);
+    }
+
   } catch (error) {
      console.error(`Error: ${error.message}`, error.details || error);
   } finally {
@@ -188,11 +205,13 @@ main();
 
 ## 🚕 Example: Taxi Bot
 
-This example demonstrates using conversation history and tool calling (function calling) to create a simple taxi dispatcher bot.
+This example demonstrates using conversation history and tool calling. **Note the mandatory addition of `historyAdapter` and the corresponding `require`.**
 
 ```javascript
 // taxi-bot.js (CommonJS)
 const { OpenRouterClient } = require("openrouter-kit");
+// !!! IMPORTANT: Require MemoryHistoryStorage directly !!!
+const { MemoryHistoryStorage } = require("openrouter-kit/dist/history/memory-storage");
 const readline = require('readline').createInterface({
   input: process.stdin,
   output: process.stdout
@@ -200,31 +219,24 @@ const readline = require('readline').createInterface({
 
 // Example proxy configuration (if needed)
 // const proxyConfig = {
-//   host: "your.proxy.server",
-//   port: 8080, // can be string or number
-//   user: "proxy_user", // optional
-//   pass: "proxy_pass", // optional
+//   host: "",
+//   port: "",
+//   user: "",
+//   pass: "",
 // };
 
 const client = new OpenRouterClient({
-  apiKey: process.env.OPENROUTER_API_KEY || "sk-or-v1-...", // Replace or use env!
-  model: "google/gemini-2.0-flash-001", // Use a fast model
-  // Uses default memory adapter (explicitly specifying is not required)
-  // historyAdapter: new MemoryHistoryStorage(), // Equivalent to omitting or historyStorage: 'memory'
-  // proxy: proxyConfig, // Uncomment if using a proxy
-  enableCostTracking: true, // Enable cost calculation
-  debug: false, // Set to true for detailed logs
-  // Example security settings:
-  // security: {
-  //   defaultPolicy: 'deny-all', // Deny all tools by default
-  //   toolAccess: { // Allow specific tools
-  //       'estimateRideCost': { allow: true },
-  //       'acceptOrder': { allow: true },
-  //   }
-  // }
+  apiKey: process.env.OPENROUTER_API_KEY || "sk-or-v1-...", // Replace!
+  model: "google/gemini-2.0-flash-001",
+  // !!! IMPORTANT: Provide an adapter to enable history !!!
+  historyAdapter: new MemoryHistoryStorage(),
+//  proxy: proxyConfig,
+  enableCostTracking: true,
+  debug: false,
+  // security: { /* ... */ }
 });
 
-let orderAccepted = false; // Flag to end the conversation
+let orderAccepted = false;
 
 // --- Tool Definitions ---
 const taxiTools = [
@@ -242,17 +254,11 @@ const taxiTools = [
         required: ["from", "to"]
       },
     },
-    // The function to be executed
     execute: async (args) => {
       console.log(`[Tool estimateRideCost] Calculating cost from ${args.from} to ${args.to}...`);
-      // Simulate cost calculation
-      const cost = Math.floor(Math.random() * 900) + 100; // Random cost between 100 and 999
+      const cost = Math.floor(Math.random() * 900) + 100;
       console.log(`[Tool estimateRideCost] Calculated cost: ${cost} RUB`);
-      // Important: return data the model can use
-      return {
-        estimatedCost: cost,
-        currency: "RUB"
-      };
+      return { estimatedCost: cost, currency: "RUB" };
     }
   },
   {
@@ -265,20 +271,16 @@ const taxiTools = [
         properties: {
           from: { type: "string", description: "Confirmed origin address" },
           to: { type: "string", description: "Confirmed destination address" },
-          // Model might optionally pass the cost if it remembers it
           estimatedCost: { type: "number", description: "Approximate ride cost (if known)"}
         },
         required: ["from", "to"]
       },
     },
-    // The function to be executed
-    execute: async (args, context) => { // Context is available
+    execute: async (args, context) => {
       console.log(`[Tool acceptOrder] Accepting order from ${args.from} to ${args.to}...`);
-      console.log(`[Tool acceptOrder] Order initiated by user: ${context?.userInfo?.userId || 'anonymous'}`); // Example context usage
+      console.log(`[Tool acceptOrder] Order initiated by user: ${context?.userInfo?.userId || 'anonymous'}`);
       const driverNumber = Math.floor(Math.random() * 100) + 1;
-      orderAccepted = true; // Update flag to finish
-      // Return a string for the model to relay to the user
-      // This is better than having the model invent driver details
+      orderAccepted = true;
       return `Order successfully accepted! Driver #${driverNumber} has been assigned and will arrive shortly at ${args.from}. Destination: ${args.to}.`;
     }
   }
@@ -292,7 +294,7 @@ function askQuestion(query) {
   });
 }
 
-// System prompt for the model
+// System prompt in English for consistency
 const systemPrompt = `You are a friendly and efficient taxi service operator named "Kit". Your goal is to help the customer book a taxi.
 1. Clarify the origin ('from') and destination ('to') addresses if the customer hasn't provided them. Be polite.
 2. Once the addresses are known, MUST use the 'estimateRideCost' tool to inform the customer of the approximate cost.
@@ -303,7 +305,6 @@ const systemPrompt = `You are a friendly and efficient taxi service operator nam
 7. If the user asks something unrelated to booking a taxi, politely steer the conversation back to the topic.`;
 
 async function chatWithTaxiBot() {
-  // Unique ID for the user session (to separate history)
   const userId = `taxi-user-${Date.now()}`;
   console.log(`\nBot Kit: Hello! I'm your virtual assistant for booking a taxi. Where would you like to go? (Session ID: ${userId})`);
 
@@ -316,31 +317,25 @@ async function chatWithTaxiBot() {
       }
 
       console.log("Bot Kit: One moment, processing your request...");
+      // Pass user: userId, history will be managed automatically
+      // because historyAdapter was provided
       const result = await client.chat({
-        user: userId, // Enable history for this user
+        user: userId,
         prompt: userMessage,
         systemPrompt: systemPrompt,
-        tools: taxiTools, // Provide tools to the model
-        model: "openai/gpt-4o-mini", // Can specify a different model for example
-        temperature: 0.5, // Slightly reduce creativity for predictability
-        maxToolCalls: 5 // Limit the number of tool call rounds
+        tools: taxiTools,
+        temperature: 0.5,
+        maxToolCalls: 5
       });
 
-      // Display the model's response
       console.log(`\nBot Kit: ${result.content}\n`);
 
-      // Debug information
-      if (client.isDebugMode()) { // Use isDebugMode() to check
+      if (client.isDebugMode()) {
           console.log(`[Debug] Model: ${result.model}, Tool Calls: ${result.toolCallsCount}, Cost: ${result.cost !== null ? '$' + result.cost.toFixed(8) : 'N/A'}, Reason: ${result.finishReason}`);
       }
 
-      // If the acceptOrder tool was successfully called (via flag)
       if (orderAccepted) {
-        // The acceptance message should already be in result.content,
-        // as we return a string from acceptOrder's execute().
         console.log("Bot Kit: If you have any more questions, feel free to ask!");
-        // Could add a break here if the dialog should end after ordering
-        // break;
       }
     }
   } catch (error) {
@@ -356,13 +351,11 @@ async function chatWithTaxiBot() {
     }
   } finally {
     readline.close();
-    // Release client resources
     await client.destroy();
     console.log("\nClient stopped. Session ended.");
   }
 }
 
-// Start the bot
 chatWithTaxiBot();
 ```
 
@@ -374,305 +367,252 @@ The main class for interacting with the library.
 
 #### Configuration (`OpenRouterConfig`)
 
-When creating a client (`new OpenRouterClient(config)`), a configuration object is passed with the following main fields:
-
-*   `apiKey` (string, **required**): Your OpenRouter API key. Recommended to store in environment variables (`process.env.OPENROUTER_API_KEY`).
-*   `model` (string, optional): Default model for all requests (e.g., `'google/gemini-2.0-flash-001'`).
-*   `debug` (boolean, optional): Enable detailed logging of all operations (default: `false`).
-*   `historyAdapter` (IHistoryStorage, optional): An instance of a history storage adapter (e.g., `new DiskHistoryStorage('./my-chats')`). If not provided, `MemoryHistoryStorage` is used.
-*   `historyAutoSave` (boolean, optional): Automatically save history on process exit (only for adapters supporting persistence, like `DiskHistoryStorage`).
-*   `historyTtl` (number, optional): Time-to-live for history entries in milliseconds (default: 24 hours). Entries older than this may be deleted during cleanup.
-*   `historyCleanupInterval` (number, optional): How often to run the background task for cleaning up stale history, in milliseconds (default: 1 hour).
-*   `maxHistoryEntries` (number, optional): Maximum number of *messages* (not pairs) to store in a single conversation history (default: 40). Older messages are discarded.
-*   `maxToolCalls` (number, optional): Maximum number of tool call rounds (request -> call -> result -> request) within a single `client.chat()` call (default: 10). Prevents infinite loops.
-*   `security` (SecurityConfig, optional): Configuration object for the security module. **Crucial for safely handling tools.** (See [Security Module](#-security-module-securitymanager)).
-*   `proxy` (string | object, optional): HTTP/HTTPS proxy settings. Either a URL string (`'http://user:pass@host:port'`) or an object (`{ host: string, port: number | string, user?: string, pass?: string }`).
-*   `apiEndpoint` (string, optional): Custom OpenRouter API URL for chat completions (default: `'https://openrouter.ai/api/v1/chat/completions'`).
-*   `referer` (string, optional): Value of the `HTTP-Referer` header for API requests (for your stats on OpenRouter).
-*   `title` (string, optional): Value of the `X-Title` header for API requests (for your stats on OpenRouter).
-*   `modelFallbacks` (string[], optional): List of fallback model IDs to try in order if the primary model request (`config.model` or `options.model`) fails.
-*   `responseFormat` (ResponseFormat, optional): Default response format for all requests (e.g., `{ type: 'json_object' }`). Can be overridden in `client.chat()`.
-*   `strictJsonParsing` (boolean, optional): If `true`, when requesting JSON (`responseFormat`) and receiving invalid JSON, a `ValidationError` will be thrown. If `false` (default), the `content` field in the result will be `null`.
-*   `axiosConfig` (AxiosRequestConfig, optional): Additional settings passed directly to Axios (e.g., custom headers, timeouts, `httpsAgent`).
-*   `enableCostTracking` (boolean, optional): Enable calculation of call costs (default: `false`). Requires additional requests to the `/models` API.
-*   `priceRefreshIntervalMs` (number, optional): Interval for automatically refreshing the model price cache in milliseconds (default: 6 hours).
-*   `initialModelPrices` (Record<string, ModelPricingInfo>, optional): Provide initial model prices (e.g., from your config or cache) to avoid the first request to `/models` on startup.
+When creating a client (`new OpenRouterClient(config)`), a configuration object is passed. Key fields are described above. **Important:** To use history features, `historyAdapter` must be specified.
 
 #### Core Methods
 
-*   `chat(options: OpenRouterRequestOptions): Promise<ChatCompletionResult>`: The primary method for sending requests to the model. Automatically manages history (if `options.user` is provided) and handles tool calls (if `options.tools` are provided).
-    *   `options`: Object containing request parameters (see `OpenRouterRequestOptions` in `types/index.ts`). Key options: `prompt` or `customMessages`, `user?`, `tools?`, `model?`, `systemPrompt?`, `accessToken?`, `maxToolCalls?`, `responseFormat?`, `temperature?`, `maxTokens?`, etc.
-    *   Returns `Promise<ChatCompletionResult>` - an object with fields:
-        *   `content`: The final model response (string, JSON object, or `null` on JSON parsing error).
-        *   `usage`: Total token usage for the entire `chat()` cycle (including tool calls): `{ prompt_tokens, completion_tokens, total_tokens }` or `null`.
-        *   `model`: ID of the model that generated the *final* response.
-        *   `toolCallsCount`: Total number of *successfully executed* tool calls within this `chat()` invocation.
-        *   `finishReason`: Reason why the *final* response generation stopped (`'stop'`, `'length'`, `'tool_calls'`, `'content_filter'`, `null`).
-        *   `durationMs`: Total execution time of the `chat()` method in milliseconds.
-        *   `id`: ID of the *last* request made to the OpenRouter API.
-        *   `cost`: Calculated cost (USD) of the entire `chat()` call, or `null` if tracking is disabled (`enableCostTracking: false`) or prices for the used models are unknown.
-*   `setModel(model: string)`: Sets the default model for subsequent `chat()` calls.
-*   `setApiKey(apiKey: string)`: Updates the API key used for requests.
-*   `createAccessToken(userInfo: Omit<UserAuthInfo, 'expiresAt'>, expiresIn?: string | number): string`: Creates a JWT access token. Requires `SecurityManager` to be configured for JWT (`userAuthentication.type: 'jwt'` and `jwtSecret` must be set).
-*   `getCreditBalance(): Promise<CreditBalance>`: Fetches the current OpenRouter credit balance for the used API key. Returns `{ limit: number, usage: number }`.
-*   `getModelPrices(): Record<string, ModelPricingInfo>`: Returns an object containing the cached model prices (`{ promptCostPerMillion, completionCostPerMillion, ... }`). Relevant if `enableCostTracking: true`.
-*   `refreshModelPrices(): Promise<void>`: Forcefully triggers an update of the model price cache from the OpenRouter API. Relevant if `enableCostTracking: true`.
-*   `on(event: string, handler: (payload: any) => void)`: Subscribe to events.
-    *   `'error'`: Global library errors (payload: `OpenRouterError`).
-    *   Security events (if `SecurityManager` is enabled): `'access:denied'`, `'ratelimit:exceeded'`, `'security:dangerous_args'`, `'token:invalid'`, `'user:authenticated'`, `'tool:call'`, etc. (see `SecurityManager`).
-*   `off(event: string, handler: (payload: any) => void)`: Unsubscribe from events.
-*   `getHistoryManager(): UnifiedHistoryManager | undefined`: Returns the history manager instance (if used).
-*   `getSecurityManager(): SecurityManager | null`: Returns the security manager instance (if configured).
-*   `getCostTracker(): CostTracker | null`: Returns the cost tracker instance (if enabled).
-*   `isDebugMode(): boolean`: Checks if debug mode is enabled.
-*   `use(plugin: OpenRouterPlugin): Promise<void>`: Register a plugin.
-*   `useMiddleware(fn: MiddlewareFunction): void`: Register a middleware function.
-*   `destroy(): Promise<void>`: **IMPORTANT!** Releases all resources used by the client (stops history and price refresh timers, clears caches, removes `process.exit` handlers if attached). **Must be called when done with the client**, especially in server applications or tests, to prevent memory leaks and hanging processes.
+Described above. The `chat` method will only manage history if `user` is passed **and** `historyAdapter` is configured in the client.
 
 ### 🧩 Plugins and Middleware
 
-Plugins and middleware provide powerful mechanisms for extending and customizing `OpenRouterClient` functionality.
-
-**Plugins (`client.use(plugin)`):**
-
-*   The primary way to add complex or integrated functionality.
-*   A plugin is an object with an async or sync `init(client: OpenRouterClient)` method.
-*   Inside `init`, a plugin can:
-    *   Register middleware (`client.useMiddleware(...)`).
-    *   Subscribe to client or manager events (`client.on(...)`).
-    *   Replace standard managers (history, security, cost) with custom implementations using `client.setHistoryManager(...)`, `client.setSecurityManager(...)`, `client.setCostTracker(...)`. *Note: These setters might be non-public and accessed via `client['propertyName'] = ...` or need to be added to the public API.*
-    *   Add new methods or properties to the client instance (`client.myCustomMethod = ...`).
-*   **Examples:** Integrating with external monitoring systems, implementing custom authentication logic, adding complex response caching.
-
-**Bundled Plugins (in `plugins/` directory):**
-
-*   `createRedisHistoryPlugin(redisUrl, prefix?)`: Replaces the standard history manager with `UnifiedHistoryManager` using a Redis adapter. Requires `ioredis` to be installed.
-    ```typescript
-    import { createRedisHistoryPlugin } from 'openrouter-kit/plugins';
-    // const { createRedisHistoryPlugin } = require('openrouter-kit/plugins'); // CommonJS
-    // Install: npm install ioredis
-    await client.use(createRedisHistoryPlugin('redis://localhost:6379'));
-    ```
-*   Other plugins in the directory (`ExternalSecurity`, `BillingCostTracker`, `LoggingMiddleware`, `CustomToolRegistry`) serve as examples for creating your own.
-
-**Middleware (`client.useMiddleware(fn)`):**
-
-*   Functions executed before and/or after the main API request within `client.chat()`.
-*   Use the standard `async (ctx, next) => { ... await next(); ... }` pattern.
-*   `ctx` (MiddlewareContext): Object containing `request` (incoming options) and `response` (result or error). Middleware can modify these fields.
-*   `next`: Function to call the next middleware or the core `chat` handler.
-*   **Examples:** Logging requests/responses, modifying request options (adding headers, changing model), caching responses, checking budget before request, auditing actions.
-
-**Example Middleware for Request Cost Limiting:**
-
-```typescript
-client.useMiddleware(async (ctx, next) => {
-  const MAX_COST_PER_CALL = 0.01; // Max $0.01 per call
-  const costTracker = client.getCostTracker();
-  const model = ctx.request.options.model || client.model; // Determine the model
-
-  if (costTracker) {
-    // Approximate cost estimation *before* the call (can be inaccurate without token counts)
-    // Logic to check user balance or limits could be added here
-    console.log(`[Middleware Cost Check] Calling model ${model}.`);
-  }
-
-  await next(); // Execute the core request and other middleware
-
-  // Check cost *after* the call
-  if (ctx.response?.result?.cost && ctx.response.result.cost > MAX_COST_PER_CALL) {
-    console.warn(`[Middleware Cost Alert] Call cost (${ctx.response.result.cost.toFixed(6)}$) exceeded limit ${MAX_COST_PER_CALL}$`);
-    // Logic for notifications or blocking further requests could be added here
-  }
-});
-```
+Described above. Allow extending functionality.
 
 ### 📜 History Management (Adapters)
 
-The library uses `UnifiedHistoryManager` to manage conversation history, which operates on top of an abstract `IHistoryStorage` interface (adapter). This allows easily changing how history is stored.
+To enable automatic conversation history management (loading, saving, trimming when `user` is passed to `client.chat()`), you **must configure `historyAdapter`** in `OpenRouterConfig`. Without it, history features will not work.
 
-*   **Adapter (`IHistoryStorage`):** Interface defining `load`, `save`, `delete`, `listKeys` methods.
+*   **Adapter (`IHistoryStorage`):** Defines the interface for storage (`load`, `save`, `delete`, `listKeys`).
 *   **Built-in Adapters:**
-    *   `MemoryHistoryStorage`: Stores history in memory (default). Suitable for simple cases and testing. Data is lost on restart.
-    *   `DiskHistoryStorage`: Stores history in JSON files on disk. Configured via `chatsFolder` in the client config. Suitable for persisting history between sessions on a single server.
-*   **Configuration:**
-    *   `historyAdapter`: Pass an instance of your adapter (e.g., `new DiskHistoryStorage('./data/chats')`) or use `historyStorage: 'disk'` for the built-in disk adapter.
-    *   `maxHistoryEntries`, `historyTtl`, `historyCleanupInterval`, `historyAutoSave` configure the history manager's behavior.
-*   **Usage:** Simply pass `user` (and optionally `group`) in `client.chat()`. The manager automatically loads, uses, and saves history for the key derived from `user` and `group`.
-*   **Custom Adapters:** You can implement `IHistoryStorage` for any storage backend (DB, Redis, cloud storage). The `RedisHistoryStorage` (used in `createRedisHistoryPlugin`) serves as an example.
+    *   `MemoryHistoryStorage`: Stores history in RAM.
+        ```typescript
+        // TypeScript Import
+        import { MemoryHistoryStorage } from 'openrouter-kit/dist/history/memory-storage';
+        // CommonJS Require
+        // const { MemoryHistoryStorage } = require('openrouter-kit/dist/history/memory-storage');
 
-**Example with Disk Storage:**
+        const client = new OpenRouter({ /*...,*/ historyAdapter: new MemoryHistoryStorage() });
+        ```
+    *   `DiskHistoryStorage`: Stores history in JSON files on disk.
+        ```typescript
+        // TypeScript Import
+        import { DiskHistoryStorage } from 'openrouter-kit/dist/history/disk-storage';
+        // CommonJS Require
+        // const { DiskHistoryStorage } = require('openrouter-kit/dist/history/disk-storage');
 
-```typescript
-import OpenRouter from 'openrouter-kit';
-import { DiskHistoryStorage } from 'openrouter-kit/history'; // Import the adapter
-
-const client = new OpenRouter({
-  apiKey: 'YOUR_KEY',
-  historyAdapter: new DiskHistoryStorage('./.my-chat-history'), // Specify folder
-  maxHistoryEntries: 50, // Store more messages
-  historyAutoSave: true, // Save on exit
-});
-
-// Further use of client.chat({ user: '...', prompt: '...' })
-// will persist history in the ./.my-chat-history folder
-```
+        const client = new OpenRouter({ /*...,*/ historyAdapter: new DiskHistoryStorage('./my-chats') });
+        ```
+    *   **Note:** Paths for `import`/`require` might change if you reorganize library exports.
+*   **Redis Plugin:** Use `createRedisHistoryPlugin` for easy Redis integration (requires `ioredis`).
+*   **Settings:** `maxHistoryEntries`, `historyTtl`, `historyCleanupInterval` control the behavior of `UnifiedHistoryManager`, which uses the provided adapter.
 
 ### 🛠️ Tool Handling (Function Calling)
 
-Allows LLMs to call your functions to retrieve information or perform actions.
+This feature allows LLM models to call your own JavaScript/TypeScript functions to retrieve external information, interact with other APIs, or perform real-world actions.
 
 1.  **Define a Tool (`Tool` interface):**
-    *   `type: 'function'` (currently the only type).
-    *   `function`: Object describing the function for the LLM:
-        *   `name` (string): Function name.
-        *   `description` (string, optional): Description of what the function does (important for the LLM).
-        *   `parameters` (object, optional): JSON Schema describing the expected arguments. Used for validation.
-    *   `execute: (args: any, context?: ToolContext) => Promise<any> | any`: **Your function** to be called. Receives parsed and validated arguments (`args`) and optional context (`context`) containing `userInfo` (if authenticated) and `securityManager`. Should return a result that will be JSON-serialized and sent back to the LLM.
-    *   `security` (ToolSecurity, optional): Tool-specific security rules (e.g., `requiredRole`, `rateLimit`).
+    You define each tool as an object conforming to the `Tool` interface. Key fields:
+    *   `type: 'function'` (currently the only supported type).
+    *   `function`: An object describing the function for the LLM:
+        *   `name` (string): The unique name of the function that the model will use to call it.
+        *   `description` (string, optional): A clear description of what the function does and when it should be used. This is **crucial** for the model to understand the tool's purpose.
+        *   `parameters` (object, optional): A [JSON Schema](https://json-schema.org/) object describing the structure, types, and required fields of the arguments your function expects. The library uses this schema to validate arguments received from the model. If no arguments are needed, this field can be omitted.
+    *   `execute: (args: any, context?: ToolContext) => Promise<any> | any`: **Your async or sync function** that will be executed when the model requests this tool call.
+        *   `args`: An object containing the arguments provided by the model, already parsed from the JSON string and (if a schema was provided) validated against `parameters`.
+        *   `context?`: An optional `ToolContext` object containing additional information about the call, such as:
+            *   `userInfo?`: A `UserAuthInfo` object with data about the authenticated user (if `SecurityManager` is used and an `accessToken` was provided).
+            *   `securityManager?`: The `SecurityManager` instance (if used).
+    *   `security` (ToolSecurity, optional): An object for defining tool-specific security rules, such as `requiredRole`, `requiredScopes`, or `rateLimit`. These rules are checked by the `SecurityManager` before `execute` is called.
 
-2.  **Use in `chat()`:**
-    *   Pass an array of defined tools in `options.tools`.
-    *   The library automatically handles the full cycle:
-        *   Sends tool definitions to the model.
-        *   If the model requests a tool call (`finish_reason: 'tool_calls'`):
-            *   Parses arguments from the model's response (`ToolCall.function.arguments`).
-            *   Validates arguments against the JSON Schema (`Tool.function.parameters`).
-            *   **Performs security checks** (`SecurityManager`, if configured): access (ACL), rate limits, argument sanitization.
-            *   Calls your `execute(args, context)` function.
-            *   Sends the result (or execution error) back to the model in a `role: 'tool'` message.
-            *   Receives the final response from the model (with `role: 'assistant'`).
-    *   `options.maxToolCalls`: Limits the number of "request-call-result" cycles.
-    *   `options.toolChoice`: Allows forcing a specific tool or disabling tools (`'none'`, `'auto'`, `{ type: "function", function: { name: "my_func" } }`).
+2.  **Use in `client.chat()`:**
+    *   Pass an array of your defined tools in the `tools` option of the `client.chat()` method.
+    *   The library handles the entire complex interaction flow automatically:
+        1.  Sends the tool definitions (name, description, parameter schema) to the model along with your prompt.
+        2.  If the model decides it needs to call one or more tools to respond, it will return a response with `finish_reason: 'tool_calls'` and a list of `tool_calls`.
+        3.  The library intercepts this response. For each requested `toolCall`:
+            *   Finds the corresponding tool in your `tools` array by name.
+            *   Parses the argument string (`toolCall.function.arguments`) into a JavaScript object.
+            *   Validates the resulting argument object against the JSON Schema specified in `tool.function.parameters` (if provided).
+            *   **Performs security checks** via `SecurityManager` (if configured): verifies user (`userInfo`) permissions for this tool, applies rate limits, and checks arguments for dangerous content.
+            *   If all checks pass, calls your `tool.execute(parsedArgs, context)` function.
+            *   Waits for the result (or catches errors) from your `execute` function.
+            *   Formats the result (or error information) and sends it back to the model in a new message with `role: 'tool'` and the `tool_call_id`.
+        4.  The model receives the tool call results and generates the final, meaningful response to the user (now with `role: 'assistant'`).
+    *   The `maxToolCalls` option in `client.chat()` or the client configuration limits the maximum number of these "request-call-result" cycles to prevent infinite loops if the model continuously requests tools.
+    *   The `toolChoice` option allows controlling the model's tool selection: `'auto'` (default), `'none'` (disable tool calls), or force a specific function call `{ type: "function", function: { name: "my_tool_name" } }`.
 
-3.  **Result:** The final model response is in `ChatCompletionResult.content`. `ChatCompletionResult.toolCallsCount` indicates how many tools were called.
+3.  **Result:** The final model response (after all potential tool calls) will be available in `ChatCompletionResult.content`. The `ChatCompletionResult.toolCallsCount` field indicates how many times tools were successfully called and executed within that single `client.chat()` invocation.
 
 ### 🔒 Security Module (`SecurityManager`)
 
-Provides comprehensive protection when working with tools. Activated by passing a `security: SecurityConfig` object to the client constructor. **Highly recommended when using tools**, especially if they perform actions or access sensitive data.
+Provides multi-layered protection when using tools, which is crucial if tools can perform actions or access data. Activated by passing a `security: SecurityConfig` object to the client constructor.
 
 **Components:**
 
-*   `AuthManager`: Handles authentication (JWT by default).
-*   `AccessControlManager`: Checks permissions to access tools (ACL).
-*   `RateLimitManager`: Manages call limits.
-*   `ArgumentSanitizer`: Checks arguments for malicious content.
+*   `AuthManager`: Handles user authentication. Supports JWT out-of-the-box. Generates (`createAccessToken`) and validates (`authenticateUser`) tokens. Uses `jwtSecret` from config. Can be extended for other methods via `customAuthenticator`.
+*   `AccessControlManager`: Checks if an authenticated user (or anonymous user, if allowed) has permission to call a specific tool. Uses rules from `security.toolAccess` and `security.roles`. Considers the `defaultPolicy`.
+*   `RateLimitManager`: Tracks and enforces call frequency limits for tools per user. Finds the relevant limit in the configuration (`security.roles`, `security.toolAccess`, or `tool.security`).
+*   `ArgumentSanitizer`: Analyzes arguments passed to tool `execute` functions for potentially dangerous strings or patterns (e.g., SQL injection attempts, XSS, OS commands). Uses regular expressions and blocklists from `security.dangerousArguments`. Can operate in blocking or audit-only (`auditOnlyMode`) mode.
 
 **Configuration (`SecurityConfig`):**
 
-*   `defaultPolicy` (`'deny-all'` | `'allow-all'`): Default access to tools if no specific rules match. `'deny-all'` is recommended.
+Defines the security module's behavior in detail. Key fields:
+
+*   `defaultPolicy` (`'deny-all'` | `'allow-all'`): What to do if no explicit access rule exists for a tool? `'deny-all'` is recommended.
 *   `requireAuthentication` (boolean): If `true`, a valid `accessToken` is required for *any* tool call.
 *   `allowUnauthenticatedAccess` (boolean): If `true` and `requireAuthentication: false`, allows calls to tools explicitly permitted for anonymous users without an `accessToken`.
-*   `userAuthentication` (`UserAuthConfig`): Authentication settings.
-    *   `type`: `'jwt'`, `'api-key'`, `'custom'`.
-    *   `jwtSecret`: **REQUIRED** for `type: 'jwt'`. Use a strong secret from environment variables. **Never use default secrets in production!**
-    *   `customAuthenticator`: Function to validate custom tokens/keys.
-*   `toolAccess` (`Record<string, ToolAccessConfig>`): Access rules per tool name (or `*` for all).
-    *   `allow` (boolean): Explicitly allow/deny.
-    *   `roles` (string | string[]): Roles allowed access.
-    *   `scopes` (string | string[]): Permissions allowed access.
-    *   `rateLimit` (`RateLimit`): Call limit for this tool (overrides role limits).
-    *   `allowedApiKeys` (string[]): Specific API keys allowed access.
-*   `roles` (`RolesConfig`): Role definitions.
-    *   `roles`: Object where keys are role names, values are `RoleConfig`:
-        *   `allowedTools` (string | string[]): Tools allowed for the role (`*` for all).
-        *   `rateLimits` (`Record<string, RateLimit>`): Call limits for this role (key is tool name or `*`).
-*   `dangerousArguments` (`DangerousArgumentsConfig`): Argument sanitization settings.
-    *   `globalPatterns`, `toolSpecificPatterns`, `extendablePatterns` (RegExp[] | string[]): Patterns to detect dangerous content.
-    *   `blockedValues` (string[]): Forbidden substrings.
-    *   `auditOnlyMode` (boolean): If `true`, dangerous arguments are logged but the call is not blocked.
+*   `userAuthentication` (`UserAuthConfig`): Configures the authentication method (`type: 'jwt'`, `jwtSecret`, `customAuthenticator`). **It is critical to set a strong `jwtSecret` if using JWT! Never use default secrets in production!**
+*   `toolAccess` (`Record<string, ToolAccessConfig>`): Access rules for specific tools (by name) or all tools (`'*'`). Includes `allow`, `roles`, `scopes`, `rateLimit`, `allowedApiKeys`.
+*   `roles` (`RolesConfig`): Defines roles and their privileges (`allowedTools`, `rateLimits`).
+*   `dangerousArguments` (`DangerousArgumentsConfig`): Settings for argument sanitization (`globalPatterns`, `toolSpecificPatterns`, `blockedValues`, `auditOnlyMode`).
 
 **Usage:**
 
-1.  Configure `SecurityManager` by passing `security: securityConfig` to the client constructor.
-2.  When calling `client.chat()`, pass `accessToken: 'your_jwt_token'` in the options if authentication is required.
-3.  `SecurityManager` automatically performs all checks before calling a tool's `execute` function. Violations will throw appropriate errors (`AuthorizationError`, `AccessDeniedError`, `RateLimitError`, `SecurityError`).
-4.  Use `client.createAccessToken(userInfo, expiresIn?)` to generate JWTs.
-5.  Subscribe to security events (`access:denied`, `ratelimit:exceeded`, etc.) via `client.on(...)` for monitoring.
+1.  Pass a `securityConfig` object to the `OpenRouterClient` constructor.
+2.  For authenticated requests, pass the access token in `client.chat({ accessToken: '...' })`.
+3.  When a tool is invoked, the library automatically calls `securityManager.checkToolAccessAndArgs()`, which performs all necessary checks (authentication, authorization, rate limits, arguments).
+4.  If any rule is violated, an appropriate error (`AuthorizationError`, `AccessDeniedError`, `RateLimitError`, `SecurityError`) is thrown, and the `execute` function is not called.
+5.  Use `client.createAccessToken()` to generate JWTs (if configured).
+6.  Subscribe to security events (`client.on('access:denied', ...)` etc.) for monitoring and response.
 
 ### 📈 Cost Tracking
 
-Allows estimating the costs of using the OpenRouter API.
+Allows **estimating** the cost of each `client.chat()` call based on token usage and OpenRouter model prices.
 
-**Enable:** Set `enableCostTracking: true` in the client config.
-
-**Mechanism:**
-
-1.  `CostTracker` is initialized with the client.
-2.  It periodically (default: every 6 hours, configurable via `priceRefreshIntervalMs`) fetches model prices from the `https://openrouter.ai/api/v1/models` endpoint.
-3.  Prices are cached. Initial prices can be provided via `initialModelPrices`.
-4.  After each `chat()` call, `CostTracker.calculateCost(model, usage)` is invoked to calculate the cost based on tokens (`usage`) and cached prices.
-5.  The result is added to `ChatCompletionResult.cost`.
-
-**Client Methods:**
-
-*   `getCreditBalance(): Promise<CreditBalance>`: Get credit limit and current usage.
-*   `getModelPrices(): Record<string, ModelPricingInfo>`: Get the price cache.
-*   `refreshModelPrices(): Promise<void>`: Force-refresh the price cache.
-*   `getCostTracker(): CostTracker | null`: Get the tracker instance.
-
-**Accuracy:** The calculation is an **estimate**, as exact pricing and application methods may change on OpenRouter's side.
+*   **Enable:** Set `enableCostTracking: true` in `OpenRouterConfig`.
+*   **Mechanism:**
+    1.  A `CostTracker` instance is created with the client.
+    2.  The `CostTracker` fetches current prices for all available models from the OpenRouter API `/models` endpoint. This happens on startup (unless `initialModelPrices` are provided) and then periodically (interval set by `priceRefreshIntervalMs`, default 6 hours).
+    3.  The fetched prices (cost per million input and output tokens) are cached in memory.
+    4.  After each successful `client.chat()` call, the library retrieves the token usage information (`usage`) from the API response.
+    5.  `costTracker.calculateCost(model, usage)` is called, using the cached prices for the used model and the `usage` data to calculate the cost. It accounts for both prompt and completion tokens, including those used during tool calls (if any).
+    6.  The calculated value (a number in USD) or `null` (if prices for the model are unknown or tracking is disabled) is added to the `cost` field of the returned `ChatCompletionResult` object.
+*   **Related Client Methods:**
+    *   `getCreditBalance(): Promise<CreditBalance>`: Fetches the current credit limit and usage from your OpenRouter account.
+    *   `getModelPrices(): Record<string, ModelPricingInfo>`: Returns the current cache of model prices used by the tracker.
+    *   `refreshModelPrices(): Promise<void>`: Forcefully triggers a background refresh of the model price cache.
+    *   `getCostTracker(): CostTracker | null`: Provides access to the `CostTracker` instance (if enabled).
+*   **Accuracy:** Keep in mind that this is an **estimate**. Actual costs might differ slightly due to rounding or changes in OpenRouter's pricing policy not yet reflected in the cache.
 
 ### ⚙️ Response Format (`responseFormat`)
 
-Forces the model to generate output in JSON format. Can be set in the client config (default) or in `client.chat()` options (per-request).
+Allows instructing the model to generate its response in JSON format, useful for obtaining structured data.
 
-*   `{ type: 'json_object' }`: Requires any valid JSON object.
-*   `{ type: 'json_schema', json_schema: { name: 'MySchema', schema: { ... } } }`: Requires JSON conforming to the provided JSON Schema. `name` is an arbitrary identifier, `schema` is the JSON Schema object itself.
-
-**Important Notes:**
-*   Not all models support `responseFormat`.
-*   When using `responseFormat`, the model can only generate JSON. Normal text output is not possible in the same call.
+*   **Configuration:** Set via the `responseFormat` option in `OpenRouterConfig` (for a default format) or in the `options` of the `client.chat()` method (for a specific request).
+*   **Types:**
+    *   `{ type: 'json_object' }`: Instructs the model to return any valid JSON object.
+    *   `{ type: 'json_schema', json_schema: { name: string, schema: object, strict?: boolean, description?: string } }`: Requires the model to return JSON that conforms to the provided JSON Schema.
+        *   `name`: An arbitrary name for your schema.
+        *   `schema`: The JSON Schema object describing the expected JSON structure.
+        *   `strict` (optional): Request strict schema adherence (if supported by the model).
+        *   `description` (optional): A description of the schema for the model.
+*   **Example:**
+    ```typescript
+    const userSchema = {
+      type: "object",
+      properties: { name: { type: "string"}, age: {type: "number"} },
+      required: ["name", "age"]
+    };
+    const result = await client.chat({
+      prompt: 'Generate JSON for a user: name Alice, age 30.',
+      responseFormat: {
+        type: 'json_schema',
+        json_schema: { name: 'UserData', schema: userSchema }
+      }
+    });
+    // result.content will contain the object { name: "Alice", age: 30 } or null/error
+    ```
 *   **Parsing Error Handling:**
-    *   If `strictJsonParsing: false` (default): On invalid JSON or schema mismatch, `ChatCompletionResult.content` will be `null`.
-    *   If `strictJsonParsing: true`: A `ValidationError` will be thrown.
+    *   If the client option `strictJsonParsing: false` (default): If the model returns invalid JSON or JSON not matching the schema, the `ChatCompletionResult.content` field will be `null`.
+    *   If the client option `strictJsonParsing: true`: In the same situation, a `ValidationError` will be thrown.
+*   **Model Support:** Not all models guarantee support for `responseFormat`. Check the specific model's documentation.
 
 ### ⚠️ Error Handling
 
-The library uses a hierarchy of custom errors inheriting from `OpenRouterError`.
+The library provides a structured error handling system to simplify debugging and control flow.
 
-*   **`OpenRouterError`**: Base class. Contains `message`, `code` (from `ErrorCode`), `statusCode?`, `details?`.
-*   **Subclasses:** `APIError`, `ValidationError`, `NetworkError`, `AuthenticationError`, `AuthorizationError`, `AccessDeniedError`, `ToolError`, `RateLimitError`, `TimeoutError`, `ConfigError`, `SecurityError`.
-*   **`ErrorCode` (enum):** String codes to identify error types (e.g., `ErrorCode.RATE_LIMIT_ERROR`, `ErrorCode.DANGEROUS_ARGS`).
-*   **`mapError(error: any)`:** Internal function (exported) to convert Axios or standard `Error` objects into an `OpenRouterError`.
+*   **Base Class `OpenRouterError`**: All library errors inherit from this. Contains:
+    *   `message`: Human-readable error description.
+    *   `code` (`ErrorCode`): String code for programmatically identifying the error type (e.g., `API_ERROR`, `VALIDATION_ERROR`, `RATE_LIMIT_ERROR`).
+    *   `statusCode?` (number): HTTP status code from the API response, if applicable.
+    *   `details?` (any): Additional data or the original error object.
+*   **Subclasses**: Specific error situations use subclasses like:
+    *   `APIError`: Error returned by the OpenRouter API (status >= 400).
+    *   `ValidationError`: Data validation error (config, arguments, JSON/schema response).
+    *   `NetworkError`: Network issue connecting to the API.
+    *   `AuthenticationError`: Problem with the API key (usually 401).
+    *   `AuthorizationError`: Invalid or expired access token (usually 401).
+    *   `AccessDeniedError`: User authenticated but lacks permissions (usually 403).
+    *   `RateLimitError`: Request limit exceeded (usually 429). Contains `details.timeLeft` (ms).
+    *   `ToolError`: Error during the execution of a tool's `execute` function.
+    *   `ConfigError`: Incorrect library configuration.
+    *   `SecurityError`: General security error (includes `DANGEROUS_ARGS`).
+    *   `TimeoutError`: API response timeout exceeded.
+*   **`ErrorCode` Enum**: Contains all possible string error codes (`ErrorCode.API_ERROR`, `ErrorCode.TOOL_ERROR`, etc.).
+*   **`mapError(error)` Function**: Used internally to convert Axios and standard `Error` objects into `OpenRouterError`. Exported for potential use.
+*   **Handling Recommendations**:
+    *   Use `try...catch` blocks around client method calls (`client.chat()`, `client.getCreditBalance()`, etc.).
+    *   Check the error type using `instanceof` (e.g., `if (error instanceof RateLimitError)`) or the code (`if (error.code === ErrorCode.VALIDATION_ERROR)`).
+    *   Analyze `error.statusCode` and `error.details` for context.
+    *   Subscribe to the global client `'error'` event (`client.on('error', handler)`) for centralized logging or tracking of unexpected errors.
 
-**Recommendations:**
+```typescript
+import { OpenRouterError, RateLimitError, ValidationError, ErrorCode } from 'openrouter-kit';
 
-*   Use `try...catch` around `client.chat()` and other method calls.
-*   Check the error type using `instanceof` (e.g., `error instanceof RateLimitError`) or `error.code` (e.g., `error.code === ErrorCode.VALIDATION_ERROR`).
-*   Use `error.statusCode` for the HTTP status (if applicable).
-*   Check `error.details` for additional information.
-*   Subscribe to the client's `'error'` event for global error handling: `client.on('error', (err) => console.error('Global Error:', err));`.
+try {
+  // ... client.chat() call ...
+} catch (error: any) {
+  if (error instanceof RateLimitError) {
+    const retryAfter = Math.ceil((error.details?.timeLeft || 1000) / 1000); // Seconds
+    console.warn(`Rate limit exceeded! Try again in ${retryAfter} sec.`);
+  } else if (error.code === ErrorCode.VALIDATION_ERROR) {
+    console.error(`Validation Error: ${error.message}`, error.details);
+  } else if (error.code === ErrorCode.TOOL_ERROR && error.message.includes('Maximum tool call depth')) {
+     console.error(`Tool call depth limit reached: ${error.message}`);
+  } else if (error instanceof OpenRouterError) {
+    console.error(`OpenRouter Kit Error (${error.code}, Status: ${error.statusCode || 'N/A'}): ${error.message}`);
+    if(error.details) console.error('Details:', error.details);
+  } else {
+    console.error(`Unknown Error: ${error.message}`);
+  }
+}
+```
 
 ### 📝 Logging
 
-*   A built-in `Logger` is used throughout the library.
-*   Activated by the `debug: true` flag in the client configuration.
-*   Outputs messages with prefixes (e.g., `[SecurityManager]`, `[CostTracker]`) for easy source identification.
-*   Uses `console.log`, `console.debug`, `console.warn`, `console.error`.
+The library uses a built-in logger for outputting debug information and event messages.
+
+*   **Activation:** Set `debug: true` in `OpenRouterConfig` when creating the client.
+*   **Levels:** Uses standard console levels: `console.debug`, `console.log`, `console.warn`, `console.error`. When `debug: false`, only critical warnings or errors during initialization are typically shown.
+*   **Prefixes:** Messages are automatically prefixed with the component source (e.g., `[OpenRouterClient]`, `[SecurityManager]`, `[CostTracker]`, `[HistoryManager]`), aiding debugging.
+*   **Customization:** While direct logger replacement isn't a standard API feature, you can pass your logger to some components (like `HistoryManager` if created manually) or use plugins/middleware to intercept and redirect logs.
+*   **`isDebugMode()` Method:** Allows checking the current state of the client's debug mode (`client.isDebugMode()`).
 
 ### 🌐 Proxy
 
-Configure an HTTP/HTTPS proxy via the `proxy` field in `OpenRouterConfig`:
+To route requests to the OpenRouter API through an HTTP/HTTPS proxy, use the `proxy` option in `OpenRouterConfig`.
 
-```typescript
-// URL string format
-const client1 = new OpenRouter({
-  apiKey: 'YOUR_KEY',
-  proxy: 'http://user:pass@your-proxy.com:8080'
-});
-
-// Object format
-const client2 = new OpenRouter({
-  apiKey: 'YOUR_KEY',
-  proxy: {
-      host: 'proxy.example.com',
-      port: 8888, // Can be number or string
-      user: 'optional_user', // optional
-      pass: 'optional_pass' // optional
-  }
-});
-```
+*   **Formats:**
+    *   **URL String:** The full proxy URL, including protocol, optional authentication, host, and port.
+        ```typescript
+        proxy: 'http://user:password@proxy.example.com:8080'
+        ```
+        ```typescript
+        proxy: 'https://secureproxy.com:9000'
+        ```
+    *   **Object:** A structured object with fields:
+        *   `host` (string, **required**): Proxy server hostname or IP.
+        *   `port` (number | string, **required**): Proxy server port.
+        *   `user?` (string, optional): Username for proxy authentication.
+        *   `pass?` (string, optional): Password for proxy authentication.
+        ```typescript
+        proxy: {
+          host: '192.168.1.100',
+          port: 8888, // can also be string '8888'
+          user: 'proxyUser',
+          pass: 'proxyPassword'
+        }
+        ```
+*   **Mechanism:** The library uses `https-proxy-agent` to route HTTPS traffic through the specified HTTP/HTTPS proxy.
 
 ## 📄 License
 
