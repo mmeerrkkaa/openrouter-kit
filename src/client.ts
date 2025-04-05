@@ -108,6 +108,7 @@ export class OpenRouterClient {
   private costTracker: CostTracker | null;
   private plugins: import('./types').OpenRouterPlugin[] = [];
   private middlewares: import('./types').MiddlewareFunction[] = [];
+  // duplicate plugin/middleware fields removed
   private apiBaseUrl: string;
 
   constructor(config: OpenRouterConfig) {
@@ -1150,21 +1151,29 @@ export class OpenRouterClient {
    */
   // duplicate getHistoryManager removed
 
+  // duplicate plugin/middleware methods removed
+
+  /**
+   * Register a plugin. Calls plugin.init(this).
+   */
   public async use(plugin: import('./types').OpenRouterPlugin): Promise<void> {
     if (!plugin || typeof plugin.init !== 'function') {
-        throw new ConfigError('Invalid plugin: missing init() method');
+      throw new Error('Invalid plugin: missing init() method');
     }
     await plugin.init(this);
     this.plugins.push(plugin);
-    this.logger.log(`Plugin registered: ${plugin.constructor?.name || 'anonymous plugin'}`);
+    this.logger?.log?.(`Plugin registered: ${plugin.constructor?.name || 'anonymous plugin'}`);
   }
 
+  /**
+   * Register a middleware function.
+   */
   public useMiddleware(fn: import('./types').MiddlewareFunction): void {
     if (typeof fn !== 'function') {
-        throw new ConfigError('Middleware must be a function');
+      throw new Error('Middleware must be a function');
     }
     this.middlewares.push(fn);
-    this.logger.log(`Middleware registered: ${fn.name || 'anonymous'}`);
+    this.logger?.log?.(`Middleware registered: ${fn.name || 'anonymous'}`);
   }
 
   private async _runMiddlewares(ctx: import('./types').MiddlewareContext, coreFn: () => Promise<void>): Promise<void> {
@@ -1177,6 +1186,22 @@ export class OpenRouterClient {
       }
     };
     await dispatch(0);
+  }
+
+  /**
+   * Replace the SecurityManager instance (for plugins)
+   */
+  public setSecurityManager(securityManager: SecurityManager | null): void {
+    this.securityManager = securityManager;
+    this.logger?.log?.('SecurityManager replaced via plugin');
+  }
+
+  /**
+   * Replace the CostTracker instance (for plugins)
+   */
+  public setCostTracker(costTracker: CostTracker | null): void {
+    this.costTracker = costTracker;
+    this.logger?.log?.('CostTracker replaced via plugin');
   }
 
 } // End of OpenRouterClient class
