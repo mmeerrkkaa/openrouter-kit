@@ -1,4 +1,5 @@
 import type { IHistoryStorage, Message } from '../types';
+import { Logger } from '../utils/logger';
 
 // Interface for the optional cache entry
 interface HistoryEntry {
@@ -23,11 +24,17 @@ export class UnifiedHistoryManager {
   private cleanupInterval: number | null; // Interval for cache cleanup (null = disabled)
   private cleanupTimer: NodeJS.Timeout | null = null;
   private destroyed = false; // Flag to prevent operations after destruction
+  private logger: Logger;
 
-  constructor(storageAdapter: IHistoryStorage, options: UnifiedHistoryManagerOptions = {}) {
+  constructor(
+    storageAdapter: IHistoryStorage,
+    options: UnifiedHistoryManagerOptions = {},
+    logger?: Logger
+  ) {
     if (!storageAdapter) {
         throw new Error("UnifiedHistoryManager requires a valid storage adapter.");
     }
+    this.logger = logger || new Logger({ prefix: '[UnifiedHistoryManager]' });
     this.storage = storageAdapter;
 
     // Set TTL and Cleanup Interval, defaulting to positive values or null if disabled/zero
@@ -38,7 +45,7 @@ export class UnifiedHistoryManager {
     if (this.cleanupInterval && this.ttl) {
         this.startCacheCleanup();
     } else {
-        console.log("[UnifiedHistoryManager] Cache TTL or cleanup interval not configured, cache cleanup disabled.");
+      this.logger.log("Cache TTL or cleanup interval not configured, cache cleanup disabled.");
     }
   }
 
@@ -55,7 +62,7 @@ export class UnifiedHistoryManager {
         if (this.cleanupTimer?.unref) {
             this.cleanupTimer.unref();
         }
-        console.log(`[UnifiedHistoryManager] Cache cleanup timer started (Interval: ${this.cleanupInterval}ms, TTL: ${this.ttl}ms).`);
+        this.logger.log(`Cache cleanup timer started (Interval: ${this.cleanupInterval}ms, TTL: ${this.ttl}ms).`);
     }
   }
 
@@ -72,7 +79,7 @@ export class UnifiedHistoryManager {
       }
     }
     if (cleanedCount > 0) {
-        console.log(`[UnifiedHistoryManager] Cleaned ${cleanedCount} expired entries from cache.`);
+      this.logger.debug(`Cleaned ${cleanedCount} expired entries from cache.`);
     }
   }
 
@@ -84,7 +91,7 @@ export class UnifiedHistoryManager {
    */
   async getHistory(key: string): Promise<Message[]> {
     if (this.destroyed) {
-        console.warn("[UnifiedHistoryManager] Attempted getHistory after destroy.");
+        this.logger.warn("[UnifiedHistoryManager] Attempted getHistory after destroy.");
         return [];
     }
     const now = Date.now();
@@ -103,7 +110,7 @@ export class UnifiedHistoryManager {
         this.cache.set(key, { messages: [...messages], lastAccess: now, created: now });
         return [...messages]; // Return a copy
     } catch (error) {
-        console.error(`[UnifiedHistoryManager] Error loading history for key '${key}' from storage:`, error);
+        this.logger.error(`Error loading history for key '${key}' from storage:`, error);
         // Depending on desired behavior, could re-throw or return empty
         throw error; // Re-throw storage errors by default
     }
@@ -118,7 +125,7 @@ export class UnifiedHistoryManager {
    */
   async addMessages(key: string, newMessages: Message[]): Promise<void> {
     if (this.destroyed) {
-        console.warn("[UnifiedHistoryManager] Attempted addMessages after destroy.");
+        this.logger.warn("[UnifiedHistoryManager] Attempted addMessages after destroy.");
         return;
     }
     if (!Array.isArray(newMessages) || newMessages.length === 0) {
@@ -135,7 +142,7 @@ export class UnifiedHistoryManager {
             entry = { messages: [...existingMessages], lastAccess: now, created: entry?.created || now }; // Preserve creation time if entry existed but expired
             this.cache.set(key, entry); // Update cache with fresh data
         } catch (error) {
-            console.error(`[UnifiedHistoryManager] Error loading history for key '${key}' before adding messages:`, error);
+            this.logger.error(`Error loading history for key '${key}' before adding messages:`, error);
             throw error; // Re-throw storage errors
         }
     }
@@ -148,7 +155,7 @@ export class UnifiedHistoryManager {
     try {
         await this.storage.save(key, entry.messages);
     } catch (error) {
-        console.error(`[UnifiedHistoryManager] Error saving history for key '${key}' to storage:`, error);
+        this.logger.error(`Error saving history for key '${key}' to storage:`, error);
         // If save fails, should we revert cache? For now, no. Cache reflects intended state.
         throw error; // Re-throw storage errors
     }
@@ -162,7 +169,7 @@ export class UnifiedHistoryManager {
    */
   async clearHistory(key: string): Promise<void> {
     if (this.destroyed) {
-        console.warn("[UnifiedHistoryManager] Attempted clearHistory after destroy.");
+        this.logger.warn("[UnifiedHistoryManager] Attempted clearHistory after destroy.");
         return;
     }
     const now = Date.now();
@@ -172,7 +179,7 @@ export class UnifiedHistoryManager {
     try {
         await this.storage.save(key, []);
     } catch (error) {
-        console.error(`[UnifiedHistoryManager] Error clearing history for key '${key}' in storage:`, error);
+        this.logger.error(`Error clearing history for key '${key}' in storage:`, error);
         throw error;
     }
   }
@@ -184,7 +191,7 @@ export class UnifiedHistoryManager {
    */
   async deleteHistory(key: string): Promise<void> {
     if (this.destroyed) {
-        console.warn("[UnifiedHistoryManager] Attempted deleteHistory after destroy.");
+        this.logger.warn("[UnifiedHistoryManager] Attempted deleteHistory after destroy.");
         return;
     }
     // Delete from cache
@@ -193,7 +200,7 @@ export class UnifiedHistoryManager {
     try {
         await this.storage.delete(key);
     } catch (error) {
-         console.error(`[UnifiedHistoryManager] Error deleting history for key '${key}' from storage:`, error);
+        this.logger.error(`Error deleting history for key '${key}' from storage:`, error);
         throw error;
     }
   }
@@ -208,7 +215,7 @@ export class UnifiedHistoryManager {
     try {
         return await this.storage.listKeys();
     } catch (error) {
-         console.error(`[UnifiedHistoryManager] Error listing keys from storage:`, error);
+        this.logger.error(`Error listing keys from storage:`, error);
         throw error;
     }
   }
@@ -234,10 +241,10 @@ export class UnifiedHistoryManager {
         try {
             await (this.storage as any).destroy();
         } catch (error) {
-             console.error(`[UnifiedHistoryManager] Error destroying storage adapter:`, error);
-             // Continue cleanup even if adapter destroy fails
+            this.logger.error(`Error destroying storage adapter:`, error);
+            // Continue cleanup even if adapter destroy fails
         }
     }
-    console.log("[UnifiedHistoryManager] Destroyed.");
+    this.logger.log("[UnifiedHistoryManager] Destroyed.");
   }
 }
