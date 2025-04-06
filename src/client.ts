@@ -8,17 +8,21 @@ import {
   Message,
   Tool,
   ResponseFormat,
-  HistoryStorageType,
-  UserAuthInfo,
-  SecurityConfig,
+  UserAuthInfo, // Base UserAuthInfo from core types
+  SecurityConfig as BaseSecurityConfig, // Use Base prefix for clarity and import base type
   ProviderPreferences,
   ToolCall,
   UsageInfo,
   ChatCompletionResult,
   CreditBalance,
-  ModelPricingInfo
+  ModelPricingInfo,
+  OpenRouterPlugin,
+  MiddlewareFunction,
+  MiddlewareContext,
+  IHistoryStorage,
+  HistoryStorageType, // Keep legacy type for config parsing if needed
 } from './types';
-import { HistoryManager } from './history-manager';
+// Removed legacy HistoryManager import
 import { ToolHandler } from './tool-handler';
 import { formatMessages, formatResponseForDisplay, formatDateTime } from './utils/formatting';
 import { validateConfig } from './utils/validation';
@@ -48,15 +52,21 @@ import {
   MAX_HISTORY_ENTRIES,
   DEFAULT_CHATS_FOLDER
 } from './config';
+// Import SecurityManager itself, not its config type here
 import { SecurityManager } from './security/security-manager';
 import { SimpleEventEmitter } from './utils/simple-event-emitter';
 import { CostTracker } from './cost-tracker';
+import { UnifiedHistoryManager } from './history/unified-history-manager';
+import { MemoryHistoryStorage } from './history/memory-storage';
 
 const DEFAULT_REFERER_URL = "https://github.com/mmeerrkkaa/openrouter-kit";
 const DEFAULT_X_TITLE = "openrouter-kit";
 
 const DEFAULT_MAX_TOOL_CALLS = 10;
 const CREDITS_API_PATH = '/auth/key';
+const MODELS_API_PATH = '/models';
+
+const DEFAULT_API_BASE_URL = 'https://openrouter.ai/api/v1';
 
 // Helper to sum usage info
 function sumUsage(usage1: UsageInfo | null | undefined, usage2: UsageInfo | null | undefined): UsageInfo | null {
@@ -84,19 +94,16 @@ interface HandleApiResponseResult {
 export class OpenRouterClient {
   private apiKey: string;
   private apiEndpoint: string;
+  private apiBaseUrl: string;
   private model: string;
   private debug: boolean;
   private proxy: string | { host: string; port: number; user?: string; pass?: string } | null;
   private headers: Record<string, string>;
-  // legacy historyManager removed
-  /**
-   * Optional unified history manager with pluggable storage adapter
-   */
-  private unifiedHistoryManager?: import('./history/unified-history-manager').UnifiedHistoryManager;
+  private unifiedHistoryManager: UnifiedHistoryManager; // Now mandatory
   private providerPreferences?: ProviderPreferences;
   private modelFallbacks: string[];
-  private enableReasoning: boolean;
-  private webSearch: boolean;
+  private enableReasoning: boolean; // Consider removing if unused
+  private webSearch: boolean; // Consider removing if unused
   private axiosInstance: AxiosInstance;
   private defaultResponseFormat: ResponseFormat | null;
   private securityManager: SecurityManager | null;
@@ -106,12 +113,10 @@ export class OpenRouterClient {
   private axiosConfig?: AxiosRequestConfig;
   private defaultMaxToolCalls: number;
   private costTracker: CostTracker | null;
-  private plugins: import('./types').OpenRouterPlugin[] = [];
-  private middlewares: import('./types').MiddlewareFunction[] = [];
-  // duplicate plugin/middleware fields removed
-  private apiBaseUrl: string;
+  private plugins: OpenRouterPlugin[] = [];
+  private middlewares: MiddlewareFunction[] = [];
 
-  constructor(config: OpenRouterConfig) {
+  constructor(config: OpenRouterConfig) { // config here uses the type from ./types which includes the base SecurityConfig
     validateConfig(config);
 
     this.debug = config.debug ?? false;
@@ -119,42 +124,36 @@ export class OpenRouterClient {
     jsonUtils.setJsonUtilsLogger(this.logger.withPrefix('JsonUtils'));
     this.clientEventEmitter = new SimpleEventEmitter();
 
-    // Initialize history manager: unified with adapter or legacy
+    this.logger.log('Initializing OpenRouter Kit...');
+
+    // Initialize Unified History Manager
+    let historyAdapter: IHistoryStorage;
     if (config.historyAdapter) {
-      this.logger.log('Using UnifiedHistoryManager with custom adapter');
-      const { UnifiedHistoryManager } = require('./history/unified-history-manager');
-      this.unifiedHistoryManager = new UnifiedHistoryManager(config.historyAdapter, {
+        this.logger.log('Using custom history adapter for UnifiedHistoryManager.');
+        historyAdapter = config.historyAdapter;
+    } else {
+        this.logger.log('No history adapter provided, defaulting to MemoryHistoryStorage.');
+        const folder = config.historyStorage === 'disk' ? (config.chatsFolder || DEFAULT_CHATS_FOLDER) : undefined;
+        if (folder) {
+            this.logger.warn(`'historyStorage: disk' without 'historyAdapter' is deprecated. Using MemoryHistoryStorage. 'chatsFolder' ignored.`);
+        }
+        historyAdapter = new MemoryHistoryStorage();
+    }
+    this.unifiedHistoryManager = new UnifiedHistoryManager(historyAdapter, {
         ttlMs: config.historyTtl,
         cleanupIntervalMs: config.historyCleanupInterval,
-        autoSave: config.historyAutoSave,
-      });
-    } else {
-      this.logger.log('Legacy HistoryManager removed');
-    }
-    this.logger.log('Initializing OpenRouter Kit...');
+        // autoSave logic is now handled within the adapter itself
+    });
+    this.logger.log(`UnifiedHistoryManager initialized with adapter: ${historyAdapter.constructor.name}`);
 
     this.apiKey = config.apiKey;
     this.apiEndpoint = config.apiEndpoint || API_ENDPOINT;
+    this.apiBaseUrl = DEFAULT_API_BASE_URL;
+    this.logger.debug(`Using API base URL for auxiliary endpoints: ${this.apiBaseUrl}`);
+
     this.model = config.model || DEFAULT_MODEL;
     this.axiosConfig = config.axiosConfig;
     this.defaultMaxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
-
-    try {
-        const url = new URL(this.apiEndpoint || API_ENDPOINT);
-        const v1Index = url.pathname.indexOf('/v1/');
-        let basePath = '/api/v1';
-        if (v1Index !== -1) {
-            basePath = url.pathname.substring(0, v1Index + '/v1'.length);
-        } else {
-             this.logger.warn(`Could not reliably determine '/v1/' base path from apiEndpoint: ${this.apiEndpoint}. Using default: ${basePath}`);
-        }
-        this.apiBaseUrl = `${url.protocol}//${url.host}${basePath}`;
-        this.logger.debug(`Determined API base URL for related endpoints: ${this.apiBaseUrl}`);
-    
-    } catch (e) {
-         this.logger.error(`Failed to parse apiEndpoint to determine base URL: ${this.apiEndpoint}. Using default.`);
-         this.apiBaseUrl = 'https://openrouter.ai/api/v1';
-    }
 
     let processedProxy: typeof this.proxy = null;
      if (config.proxy) {
@@ -206,26 +205,22 @@ export class OpenRouterClient {
 
     this.strictJsonParsing = config.strictJsonParsing ?? false;
 
-     const historyStorage: HistoryStorageType = config.historyStorage || 'memory';
-     const chatsFolder = config.historyStorage === 'disk' ? (config.chatsFolder || DEFAULT_CHATS_FOLDER) : '';
-     const maxHistory = config.maxHistoryEntries || (MAX_HISTORY_ENTRIES * 2);
-
-
     this.providerPreferences = config.providerPreferences || undefined;
     this.modelFallbacks = config.modelFallbacks || [];
     this.enableReasoning = config.enableReasoning || false;
     this.webSearch = config.webSearch || false;
     this.defaultResponseFormat = config.responseFormat || null;
 
+     // Pass the security part of the config to the SecurityManager constructor
      if (config.security) {
        this.securityManager = new SecurityManager(config.security, this.debug);
        this.logger.log('SecurityManager initialized.');
        if (this.debug) {
-         const secureConfigLog = { ...config.security };
+         const secureConfigLog = this.securityManager.getConfig(); // Get the potentially extended config
          if (secureConfigLog.userAuthentication?.jwtSecret) {
               secureConfigLog.userAuthentication = { ...secureConfigLog.userAuthentication, jwtSecret: '***REDACTED***' };
          }
-         this.logger.debug('Security settings:', secureConfigLog);
+         this.logger.debug('Effective Security settings:', secureConfigLog);
        }
      } else {
        this.securityManager = null;
@@ -305,9 +300,16 @@ export class OpenRouterClient {
               ? { model: config.data.model, messagesCount: config.data.messages?.length, toolsCount: config.data.tools?.length, otherKeys: Object.keys(config.data).filter(k => !['model', 'messages', 'tools'].includes(k)) }
               : typeof config.data;
 
+          let fullUrl = config.url || '';
+          if (config.baseURL && config.url) {
+              fullUrl = `${config.baseURL.replace(/\/$/, '')}/${config.url.replace(/^\//, '')}`;
+          } else if (config.baseURL && !config.url) {
+              fullUrl = config.baseURL;
+          }
+
           this.logger.debug('Axios Request ->', {
             method: config.method?.toUpperCase(),
-            url: config.url ? (config.baseURL ? `${config.baseURL.replace(/\/$/, '')}/${config.url.replace(/^\//, '')}` : config.url) : config.baseURL,
+            url: fullUrl,
             headers: headersToLog,
             dataSummary: dataSummary
           });
@@ -349,7 +351,7 @@ export class OpenRouterClient {
 
 
   async chat(options: OpenRouterRequestOptions): Promise<ChatCompletionResult> {
-    const ctx: import('./types').MiddlewareContext = {
+    const ctx: MiddlewareContext = {
       request: { options },
       metadata: {}
     };
@@ -359,13 +361,15 @@ export class OpenRouterClient {
         const result = await this._chatInternal(ctx.request.options);
         ctx.response = { ...(ctx.response || {}), result };
       } catch (err) {
-        ctx.response = { ...(ctx.response || {}), error: err };
+        ctx.response = { ...(ctx.response || {}), error: mapError(err) };
       }
     });
 
     if (ctx.response?.error) throw ctx.response.error;
     if (ctx.response?.result) return ctx.response.result;
-    throw new Error('Chat middleware chain did not produce a result');
+
+    this.logger.error("Middleware chain completed but no result or error was produced.");
+    throw new OpenRouterError('Chat middleware chain did not produce a result or error', ErrorCode.UNKNOWN_ERROR);
   }
 
   private async _chatInternal(options: OpenRouterRequestOptions): Promise<ChatCompletionResult> {
@@ -407,13 +411,14 @@ export class OpenRouterClient {
 
      let userInfo: UserAuthInfo | null = null;
      if (this.securityManager) {
+         const secConfig = this.securityManager.getConfig(); // Get config once
          if (accessToken) {
              try {
                  userInfo = await this.securityManager.authenticateUser(accessToken);
                  if (userInfo) {
                      this.logger.log(`User authenticated: userId=${userInfo.userId}`);
                  } else {
-                     if (this.securityManager.getConfig().requireAuthentication) {
+                     if (secConfig.requireAuthentication) {
                           this.logger.warn(`Authentication failed (token invalid or not found), but it's required.`);
                           throw new AuthenticationError('Valid access token (accessToken) is required and the one provided is invalid or expired.', 401);
                      } else {
@@ -426,7 +431,7 @@ export class OpenRouterClient {
                   this._handleError(mappedAuthError);
                   throw mappedAuthError;
              }
-         } else if (this.securityManager.getConfig().requireAuthentication) {
+         } else if (secConfig.requireAuthentication) {
              this.logger.warn('Authentication required (requireAuthentication=true), but accessToken not provided.');
              throw new AuthorizationError('Access token (accessToken) is required for this operation.', 401);
          } else {
@@ -437,36 +442,35 @@ export class OpenRouterClient {
      }
 
     // --- Main Execution ---
-    let conversationHistory: Message[] = []; // Stores history loaded initially
-    let messagesForApi: Message[] = [];    // Array passed to API and modified
-    let initialHistoryLength = 0;          // Length BEFORE adding current turn
+    let conversationHistory: Message[] = [];
+    let messagesForApi: Message[] = [];
+    let initialHistoryLength = 0;
 
     try {
-        // 1. Load initial history (if user provided and not using customMessages)
+        // 1. Load initial history
         if (user && !customMessages) {
             const historyKey = this._getHistoryKey(user, group);
             try {
-                // Get history returns a COPY, so it's safe to store
-                conversationHistory = await this.unifiedHistoryManager!.getHistory(historyKey);
+                conversationHistory = await this.unifiedHistoryManager.getHistory(historyKey);
                 this.logger.debug(`Loaded ${conversationHistory.length} messages from history for key '${historyKey}'.`);
             } catch (histError) {
-                this.logger.error(`Error loading history for key '${historyKey}':`, histError);
-                conversationHistory = []; // Start fresh on error
+                 const mappedError = mapError(histError);
+                this.logger.error(`Error loading history for key '${historyKey}':`, mappedError.message, mappedError.details);
+                conversationHistory = [];
             }
         }
-        initialHistoryLength = conversationHistory.length; // Length BEFORE adding current turn
+        initialHistoryLength = conversationHistory.length;
 
-        // 2. Prepare messages for the API call (adds current prompt/system prompt to history)
-        // Pass the loaded history to _prepareMessages
+        // 2. Prepare messages
         messagesForApi = await this._prepareMessages({
             user, group, prompt, systemPrompt, customMessages,
-            _loadedHistory: conversationHistory // Pass pre-loaded history
+            _loadedHistory: conversationHistory
         });
 
-        // 3. Build the request body
+        // 3. Build request body
         const initialRequestBody = this._buildRequestBody({
             model: modelToUse,
-            messages: messagesForApi, // Use the prepared messages
+            messages: messagesForApi,
             tools: tools?.map(ToolHandler.formatToolForAPI) || null,
             responseFormat, temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
             stop, logitBias, seed, toolChoice,
@@ -474,21 +478,19 @@ export class OpenRouterClient {
             route, transforms
         });
 
-        // 4. Send the first request
+        // 4. Send request
         const initialResponse = await this._sendRequest(initialRequestBody, 0);
 
-        // Options for subsequent recursive requests
+        // 5. Handle response
         const recursiveRequestOptions: Partial<OpenRouterRequestOptions> & { model: string } = {
             model: modelToUse,
             temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
             stop, logitBias, seed, route, transforms, responseFormat,
             parallelToolCalls: tools && tools.length > 0 ? (parallelToolCalls ?? true) : undefined
         };
-
-        // 5. Handle the response (modifies messagesForApi by adding assistant/tool messages)
         const handleResult = await this._handleApiResponse({
             response: initialResponse,
-            currentMessages: messagesForApi, // Pass the array to be modified
+            currentMessages: messagesForApi,
             tools: tools || undefined,
             userInfo,
             strictJsonParsing,
@@ -500,16 +502,17 @@ export class OpenRouterClient {
         });
 
         // --- History Saving ---
-        if (user) { // Save only if user is specified
+        if (user) {
             const historyKey = this._getHistoryKey(user, group);
-            // messagesForApi now contains: initial history + current turn messages
-            // Slice from the end of the initial history to get only the current turn's messages
             const messagesToSave = messagesForApi.slice(initialHistoryLength);
-
             if (messagesToSave.length > 0) {
-                // AddMessages handles trimming internally
-                await this.unifiedHistoryManager!.addMessages(historyKey, messagesToSave);
-                this.logger.debug(`Saved conversation turn (${messagesToSave.length} messages) to history for key '${historyKey}'.`);
+                try {
+                     await this.unifiedHistoryManager.addMessages(historyKey, messagesToSave);
+                     this.logger.debug(`Saved conversation turn (${messagesToSave.length} messages) to history for key '${historyKey}'.`);
+                } catch (histError) {
+                    const mappedError = mapError(histError);
+                    this.logger.error(`Error saving history for key '${historyKey}':`, mappedError.message, mappedError.details);
+                }
             } else {
                 this.logger.debug(`No new messages to save for history key '${historyKey}'.`);
             }
@@ -518,7 +521,6 @@ export class OpenRouterClient {
         const duration = Date.now() - startTime;
         this.logger.log(`Chat request (${logIdentifier}) completed fully in ${duration} ms.`);
 
-        // Construct the final result object
         const finalResult: ChatCompletionResult = {
             content: handleResult.content,
             usage: handleResult.usage,
@@ -529,7 +531,6 @@ export class OpenRouterClient {
             id: handleResult.id,
             cost: handleResult.cost
         };
-
         return finalResult;
 
     } catch (error) {
@@ -537,13 +538,12 @@ export class OpenRouterClient {
        this.logger.error(`Error in chat execution flow: ${mappedError.message}`, mappedError.details || mappedError);
        this._handleError(mappedError);
 
-       // Attempt to save history even on error
-       if (user && messagesForApi.length > initialHistoryLength) { // Check if anything was added after initial load
+       if (user && messagesForApi.length > initialHistoryLength) {
            const historyKey = this._getHistoryKey(user, group);
-          
            const messagesToSaveOnError = messagesForApi.slice(initialHistoryLength);
            if (messagesToSaveOnError.length > 0) {
-                this.unifiedHistoryManager!.addMessages(historyKey, messagesToSaveOnError)
+               this.unifiedHistoryManager.addMessages(historyKey, messagesToSaveOnError)
+                    .then(() => this.logger.debug(`Saved partial history on error for key '${historyKey}'.`))
                     .catch(histErr => this.logger.error(`Failed to save partial history on error for key ${historyKey}:`, histErr));
            }
        }
@@ -553,7 +553,7 @@ export class OpenRouterClient {
 
    private async _prepareMessages(params: {
      user?: string; group?: string | null; prompt: string; systemPrompt?: string | null; customMessages?: Message[] | null;
-     _loadedHistory?: Message[]; // Internal: Pass pre-loaded history
+     _loadedHistory?: Message[];
    }): Promise<Message[]> {
      const { user, group, prompt, systemPrompt, customMessages, _loadedHistory } = params;
 
@@ -571,7 +571,6 @@ export class OpenRouterClient {
      }
 
      if (!prompt && !systemPrompt) {
-         // If _loadedHistory exists, we might still proceed, but log a warning
          if (!_loadedHistory || _loadedHistory.length === 0) {
              throw new ConfigError("'prompt' must be provided if 'customMessages' is not used and history is empty");
          } else {
@@ -581,20 +580,17 @@ export class OpenRouterClient {
 
      let messages: Message[] = [];
 
-     // Use pre-loaded history if available
      if (_loadedHistory) {
          this.logger.debug(`Using pre-loaded history (${_loadedHistory.length} messages). Filtering...`);
-         // Filter the history copy for the API
          const filteredHistory = this._filterHistoryForApi(_loadedHistory);
          messages = [...messages, ...filteredHistory];
          this.logger.debug(`Added ${filteredHistory.length} filtered messages from pre-loaded history.`);
      }
-     // Fallback: Load history if user provided but not pre-loaded (should ideally not happen if chat() preloads)
      else if (user) {
        const historyKey = this._getHistoryKey(user, group);
        this.logger.warn(`_prepareMessages loading history for key '${historyKey}' (ideally should be pre-loaded by chat()).`);
        try {
-           const history = await this.unifiedHistoryManager!.getHistory(historyKey);
+           const history = await this.unifiedHistoryManager.getHistory(historyKey);
            if (history.length > 0) {
                this.logger.debug(`History loaded for key '${historyKey}', records: ${history.length}. Filtering...`);
                const filteredHistory = this._filterHistoryForApi(history);
@@ -604,34 +600,40 @@ export class OpenRouterClient {
                 this.logger.debug(`History for key '${historyKey}' empty or not found.`);
            }
        } catch (histError) {
-           this.logger.error(`Error loading history for key '${historyKey}':`, histError);
+           const mappedError = mapError(histError);
+           this.logger.error(`Error loading history for key '${historyKey}':`, mappedError.message, mappedError.details);
        }
      } else {
          this.logger.debug('User not specified, history not loaded.');
      }
 
-     // Add system prompt *after* history if it exists and there's no system message already
      if (systemPrompt && !messages.some(m => m.role === 'system')) {
          messages.unshift({ role: 'system', content: systemPrompt });
      }
 
-     // Add the current user prompt if provided
      if (prompt) {
          messages.push({ role: 'user', content: prompt });
      }
 
      this.logger.debug(`${messages.length} messages prepared for API request.`);
-     // Ensure content is null if undefined/missing before returning
      return messages.map(m => ({ ...m, content: m.content ?? null }));
    }
 
    private _filterHistoryForApi(messages: Message[]): Message[] {
        return messages.map(msg => {
            const filteredMsg: Partial<Message> = { role: msg.role };
-           if (msg.content !== undefined) filteredMsg.content = msg.content;
-           if (msg.tool_calls) filteredMsg.tool_calls = msg.tool_calls;
-           if (msg.tool_call_id) filteredMsg.tool_call_id = msg.tool_call_id;
-           if (msg.name) filteredMsg.name = msg.name;
+           if (msg.content !== undefined) {
+               filteredMsg.content = msg.content;
+           }
+           if (msg.tool_calls) {
+               filteredMsg.tool_calls = msg.tool_calls;
+           }
+           if (msg.tool_call_id) {
+               filteredMsg.tool_call_id = msg.tool_call_id;
+           }
+           if (msg.name) {
+               filteredMsg.name = msg.name;
+           }
            return filteredMsg as Message;
        }).filter(msg => msg !== null);
    }
@@ -661,12 +663,11 @@ export class OpenRouterClient {
          stop, logitBias, seed, toolChoice, parallelToolCalls, route, transforms
      } = params;
 
-     // Filter messages just before sending to API
      const apiMessages = this._filterHistoryForApi(messages);
 
      const body: Record<string, any> = {
        model: model,
-       messages: apiMessages, // Use filtered messages
+       messages: apiMessages,
        ...(temperature !== undefined && { temperature: temperature }),
      };
 
@@ -702,7 +703,9 @@ export class OpenRouterClient {
        } else if (responseFormat.type === 'json_schema') {
            this.logger.warn('Invalid responseFormat for json_schema: missing `json_schema` object with `name` and `schema`. Ignored.', responseFormat);
        } else {
-            this.logger.warn('Unknown responseFormat type. Ignored.', responseFormat);
+            if (responseFormat.type) {
+                this.logger.warn('Unknown responseFormat type. Ignored.', responseFormat);
+            }
        }
      }
 
@@ -711,28 +714,38 @@ export class OpenRouterClient {
      if (this.providerPreferences) body.provider = this.providerPreferences;
      if (this.modelFallbacks.length > 0) {
          body.models = [model, ...this.modelFallbacks];
-         this.logger.debug(`Using fallback models: ${body.models.join(', ')}`);
+         this.logger.debug(`Using model list (primary + fallbacks): ${body.models.join(', ')}`);
      }
 
      return body;
    }
 
    private async _sendRequest(requestBody: Record<string, any>, depth: number): Promise<AxiosResponse<OpenRouterResponse>> {
-      this.logger.debug(`(Depth ${depth}) Sending request to API...`);
+      this.logger.debug(`(Depth ${depth}) Sending request to API... Model: ${requestBody.model}`);
 
-      if (this.debug && depth > 0) {
+      if (this.debug) {
           try {
-              const messagesString = JSON.stringify(requestBody.messages, null, 2);
-              this.logger.debug(`(Depth ${depth}) Request Body Messages being sent:\n${messagesString}`);
-              const otherKeys = Object.keys(requestBody).filter(k => k !== 'messages');
+              const messagesSummary = requestBody.messages?.map((m: Message) => ({
+                  role: m.role,
+                  hasContent: m.content !== null && m.content !== undefined,
+                  toolCalls: m.tool_calls?.length,
+                  toolCallId: m.tool_call_id,
+                  name: m.name
+              })) || [];
+              const toolsSummary = requestBody.tools?.map((t: Tool) => ({ type: t.type, name: t.function?.name })) || [];
+              const otherKeys = Object.keys(requestBody).filter(k => !['messages', 'tools'].includes(k));
               const otherData = otherKeys.reduce((acc, key) => ({ ...acc, [key]: requestBody[key] }), {});
-              this.logger.debug(`(Depth ${depth}) Other Request Body parts:`, otherData);
+
+              this.logger.debug(`(Depth ${depth}) Request Body Details:`, {
+                  ...otherData,
+                  messagesCount: messagesSummary.length,
+                  toolsCount: toolsSummary.length,
+              });
+
           } catch (e) {
-              this.logger.error(`(Depth ${depth}) Failed to stringify requestBody for detailed logging:`, e);
-              this.logger.debug(`(Depth ${depth}) Request Body (structure only):`, { model: requestBody.model, messagesCount: requestBody.messages?.length, toolsCount: requestBody.tools?.length });
+              this.logger.error(`(Depth ${depth}) Failed to summarize requestBody for detailed logging:`, e);
+              this.logger.debug(`(Depth ${depth}) Request Body (simple):`, { model: requestBody.model, messagesCount: requestBody.messages?.length, toolsCount: requestBody.tools?.length });
           }
-      } else if (this.debug) {
-           this.logger.debug(`(Depth ${depth}) Request Body (structure only):`, { model: requestBody.model, messagesCount: requestBody.messages?.length, toolsCount: requestBody.tools?.length });
       }
 
       try {
@@ -781,7 +794,7 @@ export class OpenRouterClient {
 
    private async _handleApiResponse(params: {
        response: AxiosResponse<OpenRouterResponse>;
-       currentMessages: Message[]; // This array will be modified
+       currentMessages: Message[];
        tools?: Tool[];
        userInfo?: UserAuthInfo | null;
        strictJsonParsing: boolean;
@@ -797,7 +810,7 @@ export class OpenRouterClient {
         } = params;
 
        const responseData = response.data;
-       this.logger.debug(`(Depth ${depth}) Handling API response. Status: ${response.status}`);
+       this.logger.debug(`(Depth ${depth}) Handling API response. Status: ${response.status}, Model: ${responseData?.model}`);
 
        let currentCumulativeUsage = sumUsage(cumulativeUsage, responseData?.usage);
        if (responseData?.usage) this.logger.log(`(Depth ${depth}) Usage (this step):`, responseData.usage);
@@ -811,6 +824,9 @@ export class OpenRouterClient {
            const code = apiErrorData.code || ErrorCode.API_ERROR;
            const statusCode = response.status || (typeof apiErrorData.status === 'number' ? apiErrorData.status : 500);
            this.logger.error(`(Depth ${depth}) API returned error in body:`, responseData.error);
+           if (statusCode === 401) throw new AuthenticationError(message, statusCode, apiErrorData);
+           if (statusCode === 403) throw new AccessDeniedError(message, statusCode, apiErrorData);
+           if (statusCode === 429) throw new RateLimitError(message, statusCode, apiErrorData);
            throw new APIError(message, statusCode, { code, details: apiErrorData, depth });
        }
 
@@ -822,32 +838,38 @@ export class OpenRouterClient {
        const choice = responseData.choices[0];
        const assistantMessageFromAPI = choice.message;
 
-       if (assistantMessageFromAPI) {
-           // Add the assistant's message (incl. tool_calls) to the conversation history being built
-           currentMessages.push({ ...assistantMessageFromAPI, timestamp: formatDateTime() });
-           this.logger.debug(`(Depth ${depth}) Added assistant message (role: ${assistantMessageFromAPI.role}) to current conversation.`);
-       } else {
-            this.logger.warn(`(Depth ${depth}) No message found in API response choice.`);
+       if (!assistantMessageFromAPI) {
+            this.logger.warn(`(Depth ${depth}) No message found in API response choice[0].`);
              throw new APIError(`API response choice at depth ${depth} missing 'message' field`, response.status || 500, responseData);
        }
+
+       const assistantMessageWithTimestamp = { ...assistantMessageFromAPI, timestamp: formatDateTime() };
+       currentMessages.push(assistantMessageWithTimestamp);
+       this.logger.debug(`(Depth ${depth}) Added assistant message (role: ${assistantMessageFromAPI.role}) to current conversation.`);
+
 
        const finishReason = choice.finish_reason;
        let currentToolCallsCount = cumulativeToolCalls;
 
-       if (finishReason === 'tool_calls' && assistantMessageFromAPI.tool_calls?.length && tools?.length) {
+       if (finishReason === 'tool_calls' && assistantMessageFromAPI.tool_calls?.length) {
+           if (!tools || tools.length === 0) {
+               this.logger.error(`(Depth ${depth}) API requested tool calls, but no tools were provided in the request options.`);
+               throw new ToolError(`API requested tool calls for model ${responseData.model}, but no tools were configured for this request.`);
+           }
+
            const numberOfCalls = assistantMessageFromAPI.tool_calls.length;
            currentToolCallsCount += numberOfCalls;
-           this.logger.log(`(Depth ${depth}) Tool calls requested (${numberOfCalls}). Total calls so far: ${currentToolCallsCount}. Processing...`);
+           this.logger.log(`(Depth ${depth}) Tool calls requested by model (${numberOfCalls}). Total calls so far: ${currentToolCallsCount}. Processing...`);
 
            if (depth >= maxToolCalls) {
-               this.logger.warn(`(Depth ${depth}) Maximum tool call depth (${maxToolCalls}) reached. Aborting loop.`);
+               this.logger.warn(`(Depth ${depth}) Maximum tool call depth (${maxToolCalls}) reached. Aborting tool execution loop.`);
                throw new ToolError(`Maximum tool call depth (${maxToolCalls}) exceeded. Aborting tool execution loop.`, { depth, maxToolCalls });
            }
 
            let toolResultsMessages: Message[] = [];
            try {
                toolResultsMessages = await ToolHandler.handleToolCalls({
-                   message: assistantMessageFromAPI as Message & { tool_calls: ToolCall[] },
+                   message: assistantMessageWithTimestamp as Message & { tool_calls: ToolCall[] },
                    debug: this.debug,
                    tools: tools,
                    securityManager: this.securityManager || undefined,
@@ -861,32 +883,34 @@ export class OpenRouterClient {
                throw mappedError;
            }
 
-           // Add the results from the tool executions to the conversation history
-           toolResultsMessages.forEach(msg => currentMessages.push({ ...msg, timestamp: formatDateTime() }));
+           const toolResultsWithTimestamps = toolResultsMessages.map(msg => ({
+               ...msg,
+               timestamp: msg.timestamp || formatDateTime()
+           }));
+           toolResultsWithTimestamps.forEach(msg => currentMessages.push(msg));
            this.logger.debug(`(Depth ${depth}) Added ${toolResultsMessages.length} tool result messages to current conversation.`);
 
            this.logger.log(`(Depth ${depth}) Sending tool results back to LLM...`);
            const nextRequestBody = this._buildRequestBody({
                ...requestOptions,
                model: requestOptions.model,
-               messages: currentMessages, // Send the updated history
+               messages: currentMessages,
                tools: tools?.map(ToolHandler.formatToolForAPI) || null,
+               toolChoice: 'auto',
            });
 
            const nextResponse = await this._sendRequest(nextRequestBody, depth + 1);
 
-           // Recursively handle the response
            return await this._handleApiResponse({
                 ...params,
                 response: nextResponse,
-                currentMessages: currentMessages, // Pass the modified array
+                currentMessages: currentMessages,
                 depth: depth + 1,
                 cumulativeUsage: currentCumulativeUsage,
                 cumulativeToolCalls: currentToolCallsCount
            });
 
        } else {
-           // Final response
            this.logger.log(`(Depth ${depth}) Received final response. Finish Reason: ${finishReason}`);
            const rawContent = assistantMessageFromAPI.content;
            let finalResultContent: any = null;
@@ -897,9 +921,9 @@ export class OpenRouterClient {
                    this.logger.debug(`(Depth ${depth}) Final response: JSON format requested, attempting parse/validation...`);
                    finalResultContent = this._parseAndValidateJsonResponse(rawContent, requestedFormat, strictJsonParsing);
                } else if (requestedFormat && typeof rawContent !== 'string') {
-                   this.logger.warn(`(Depth ${depth}) Final response: JSON format requested, but content was not string (${typeof rawContent}).`, rawContent);
+                   this.logger.warn(`(Depth ${depth}) Final response: JSON format requested, but content was not a string (type: ${typeof rawContent}). Raw content:`, rawContent);
                    if (strictJsonParsing) {
-                       throw new ValidationError(`Expected a JSON string response for format ${requestedFormat.type}, received type ${typeof rawContent}.`);
+                       throw new ValidationError(`Expected a JSON string response for format ${requestedFormat.type}, but received type ${typeof rawContent}.`);
                    } else {
                        finalResultContent = null;
                    }
@@ -911,7 +935,7 @@ export class OpenRouterClient {
                finalResultContent = null;
            }
 
-           this.logger.debug(`(Depth ${depth}) Final processed result:`, finalResultContent);
+           this.logger.debug(`(Depth ${depth}) Final processed result content:`, finalResultContent);
 
            const cost = this.costTracker?.calculateCost(responseData.model, currentCumulativeUsage) ?? null;
 
@@ -946,10 +970,12 @@ export class OpenRouterClient {
     return key;
   }
 
-  public getHistoryManager(): import('./history/unified-history-manager').UnifiedHistoryManager | HistoryManager {
-    return this.unifiedHistoryManager!;
+  // --- Public API Methods ---
+
+  public getHistoryManager(): UnifiedHistoryManager {
+    return this.unifiedHistoryManager;
   }
-  public getHistoryStorageType(): HistoryStorageType { return 'memory'; }
+
   public isDebugMode(): boolean { return this.debug; }
   public getSecurityManager(): SecurityManager | null { return this.securityManager; }
   public isSecurityEnabled(): boolean { return this.securityManager !== null; }
@@ -987,7 +1013,8 @@ export class OpenRouterClient {
     }
      this.logger.log(`Requesting access token creation for user ${userInfo.userId} (validity: ${expiresIn ?? 'default'})...`);
     try {
-        return this.securityManager.createAccessToken(userInfo, expiresIn);
+        // Cast userInfo to the extended type expected by SecurityManager
+        return this.securityManager.createAccessToken(userInfo as Omit<import('./security/types').ExtendedUserAuthInfo, 'expiresAt'>, expiresIn);
     } catch (error) {
          throw mapError(error);
     }
@@ -1001,7 +1028,7 @@ export class OpenRouterClient {
       this.logger.log(`Fetching credit balance from ${creditsUrl}...`);
 
       try {
-          const response = await this.axiosInstance.get(creditsUrl);
+          const response = await this.axiosInstance.get(creditsUrl, { baseURL: '' });
 
           if (response.status === 200 && response.data?.data) {
               const data = response.data.data;
@@ -1044,13 +1071,14 @@ export class OpenRouterClient {
    }
 
 
+  // --- Event Handling ---
   public on(event: 'error', handler: (error: OpenRouterError) => void): this;
   public on(event: string, handler: (event: any) => void): this;
   public on(event: string, handler: (event: any) => void): this {
     if (event === 'error') {
         this.clientEventEmitter.on(event, handler as (error: OpenRouterError) => void);
         this.logger.debug(`Added client event handler for: ${event}`);
-    } else if (this.securityManager && (event.startsWith('security:') || event.startsWith('user:') || event.startsWith('token:') || event.startsWith('access:') || event.startsWith('ratelimit:') || event.startsWith('tool:'))) {
+    } else if (this.securityManager && (event.startsWith('security:') || event.startsWith('user:') || event.startsWith('token:') || event.startsWith('access:') || event.startsWith('ratelimit:') || event.startsWith('tool:') || event.startsWith('config:') || event.startsWith('cache:') || event.startsWith('auth:') )) {
         this.logger.debug(`Adding security event handler for: ${event}`);
         this.securityManager.on(event, handler);
     } else {
@@ -1065,7 +1093,7 @@ export class OpenRouterClient {
        if (event === 'error') {
            this.clientEventEmitter.off(event, handler as (error: OpenRouterError) => void);
            this.logger.debug(`Removed client event handler for: ${event}`);
-       } else if (this.securityManager && (event.startsWith('security:') || event.startsWith('user:') || event.startsWith('token:') || event.startsWith('access:') || event.startsWith('ratelimit:') || event.startsWith('tool:'))) {
+       } else if (this.securityManager && (event.startsWith('security:') || event.startsWith('user:') || event.startsWith('token:') || event.startsWith('access:') || event.startsWith('ratelimit:') || event.startsWith('tool:') || event.startsWith('config:') || event.startsWith('cache:') || event.startsWith('auth:') )) {
            this.logger.debug(`Removing security event handler for: ${event}`);
            this.securityManager.off(event, handler);
        } else {
@@ -1076,56 +1104,71 @@ export class OpenRouterClient {
 
    public async destroy(): Promise<void> {
        this.logger.log('Destroying OpenRouterClient...');
-       if (this.unifiedHistoryManager) {
+       if (this.unifiedHistoryManager?.destroy) {
            await this.unifiedHistoryManager.destroy();
-           this.logger.debug('HistoryManager destroyed.');
+           this.logger.debug('UnifiedHistoryManager destroyed.');
        }
-       if (this.securityManager) {
+       if (this.securityManager?.destroy) {
            this.securityManager.destroy();
            this.logger.debug('SecurityManager destroyed.');
        }
-       if (this.costTracker) {
+       if (this.costTracker?.destroy) {
            this.costTracker.destroy();
            this.logger.debug('CostTracker destroyed.');
        }
        this.clientEventEmitter.removeAllListeners();
        this.logger.debug('Client event listeners removed.');
+
+       this.plugins = [];
+       this.middlewares = [];
+
        this.logger.log('OpenRouterClient successfully destroyed.');
    }
 
-   /** @deprecated */
+  /** @deprecated Tool processing is now integrated into client.chat(). Use the main chat method instead. */
   public async handleToolCalls(params: {
-    message: Message & { tool_calls?: any[] };
+    message: Message & { tool_calls?: ToolCall[] };
     messages: Message[];
     tools?: Tool[];
     debug?: boolean;
     accessToken?: string;
   }): Promise<Message[]> {
-     this.logger.warn("Method client.handleToolCalls() is deprecated and will be removed. Tool processing is integrated into client.chat(). Use the main chat method instead.");
+     this.logger.warn("Method client.handleToolCalls() is deprecated and will be removed. Tool processing is integrated into client.chat().");
 
      if (!params.message?.tool_calls?.length) {
-          this.logger.warn("[handleToolCalls] Called without tool_calls in message. Returning empty array.");
+          this.logger.warn("[handleToolCalls Deprecated] Called without tool_calls in message. Returning empty array.");
           return [];
      }
      if (!params.tools || params.tools.length === 0) {
-         this.logger.warn("[handleToolCalls] Called without tools defined. Tool execution cannot proceed.");
+         this.logger.warn("[handleToolCalls Deprecated] Called without tools defined. Tool execution cannot proceed.");
          throw new ToolError("Tool processing failed: No tools were defined to handle the request.");
      }
 
      let userInfo: UserAuthInfo | null = null;
-     if (this.securityManager && params.accessToken) {
-         try {
-             userInfo = await this.securityManager.authenticateUser(params.accessToken);
-             if (!userInfo && this.securityManager.getConfig().requireAuthentication) {
-                  throw new AuthenticationError("Authentication required but failed for handleToolCalls.", 401);
+     let allowUnauthenticated = false;
+     let secConfig: BaseSecurityConfig | undefined; // Use base config type here
+
+     if (this.securityManager) {
+         // Get the config, which might be the extended type, but we only need base fields
+         const currentSecConfig = this.securityManager.getConfig();
+         secConfig = currentSecConfig; // Assign for use below
+         allowUnauthenticated = currentSecConfig.allowUnauthenticatedAccess ?? false;
+
+         if (params.accessToken) {
+             try {
+                 // authenticateUser returns the extended type, but we assign to base type
+                 userInfo = await this.securityManager.authenticateUser(params.accessToken);
+                 if (!userInfo && secConfig?.requireAuthentication) {
+                      throw new AuthenticationError("Authentication required but failed for handleToolCalls (Deprecated).", 401);
+                 }
+             } catch (error) {
+                 const mappedError = mapError(error);
+                 this.logger.error('[handleToolCalls Deprecated] Authentication error:', mappedError.message);
+                 throw mappedError;
              }
-         } catch (error) {
-             const mappedError = mapError(error);
-             this.logger.error('[handleToolCalls] Authentication error:', mappedError);
-             throw mappedError;
+         } else if (secConfig?.requireAuthentication && !allowUnauthenticated) {
+              throw new AuthorizationError("Authentication required but accessToken not provided for handleToolCalls (Deprecated).", 401);
          }
-     } else if (this.securityManager && this.securityManager.getConfig().requireAuthentication) {
-          throw new AuthorizationError("Authentication required but accessToken not provided for handleToolCalls.", 401);
      }
 
      try {
@@ -1134,53 +1177,50 @@ export class OpenRouterClient {
            debug: params.debug ?? this.debug,
            tools: params.tools ?? [],
            securityManager: this.securityManager || undefined,
-           userInfo: userInfo,
+           userInfo: userInfo, // Pass base or extended type, should be compatible
            logger: this.logger.withPrefix('ToolHandler(Deprecated)'),
            parallelCalls: true,
          });
          return toolResultsMessages;
      } catch (error) {
           const mappedError = mapError(error);
-          this.logger.error(`[handleToolCalls] Error during tool processing: ${mappedError.message}`, mappedError.details);
+          this.logger.error(`[handleToolCalls Deprecated] Error during tool processing: ${mappedError.message}`, mappedError.details);
           throw mappedError;
      }
   }
 
-  /**
-   * Returns the active history manager (unified or legacy)
-   */
-  // duplicate getHistoryManager removed
+  // --- Plugin and Middleware ---
 
-  // duplicate plugin/middleware methods removed
-
-  /**
-   * Register a plugin. Calls plugin.init(this).
-   */
-  public async use(plugin: import('./types').OpenRouterPlugin): Promise<void> {
+  public async use(plugin: OpenRouterPlugin): Promise<void> {
     if (!plugin || typeof plugin.init !== 'function') {
-      throw new Error('Invalid plugin: missing init() method');
+      throw new ConfigError('Invalid plugin: missing init() method or plugin is not an object');
     }
-    await plugin.init(this);
-    this.plugins.push(plugin);
-    this.logger?.log?.(`Plugin registered: ${plugin.constructor?.name || 'anonymous plugin'}`);
+    try {
+        await plugin.init(this);
+        this.plugins.push(plugin);
+        this.logger.log(`Plugin registered: ${plugin.constructor?.name || 'anonymous plugin'}`);
+    } catch (error) {
+        const mappedError = mapError(error);
+        this.logger.error(`Error initializing plugin ${plugin.constructor?.name || 'anonymous plugin'}: ${mappedError.message}`, mappedError.details);
+        throw mappedError;
+    }
   }
 
-  /**
-   * Register a middleware function.
-   */
-  public useMiddleware(fn: import('./types').MiddlewareFunction): void {
+  public useMiddleware(fn: MiddlewareFunction): void {
     if (typeof fn !== 'function') {
-      throw new Error('Middleware must be a function');
+      throw new ConfigError('Middleware must be a function');
     }
     this.middlewares.push(fn);
-    this.logger?.log?.(`Middleware registered: ${fn.name || 'anonymous'}`);
+    this.logger.log(`Middleware registered: ${fn.name || 'anonymous'}`);
   }
 
-  private async _runMiddlewares(ctx: import('./types').MiddlewareContext, coreFn: () => Promise<void>): Promise<void> {
+  private async _runMiddlewares(ctx: MiddlewareContext, coreFn: () => Promise<void>): Promise<void> {
     const stack = this.middlewares.slice();
+
     const dispatch = async (i: number): Promise<void> => {
       if (i < stack.length) {
-        await stack[i](ctx, () => dispatch(i + 1));
+        const middleware = stack[i];
+        await middleware(ctx, () => dispatch(i + 1));
       } else {
         await coreFn();
       }
@@ -1188,20 +1228,16 @@ export class OpenRouterClient {
     await dispatch(0);
   }
 
-  /**
-   * Replace the SecurityManager instance (for plugins)
-   */
   public setSecurityManager(securityManager: SecurityManager | null): void {
     this.securityManager = securityManager;
-    this.logger?.log?.('SecurityManager replaced via plugin');
+    this.logger.log(`SecurityManager instance ${securityManager ? 'replaced' : 'removed'} via plugin/method call.`);
+    this.securityManager?.setDebugMode(this.debug);
   }
 
-  /**
-   * Replace the CostTracker instance (for plugins)
-   */
   public setCostTracker(costTracker: CostTracker | null): void {
+    this.costTracker?.destroy();
     this.costTracker = costTracker;
-    this.logger?.log?.('CostTracker replaced via plugin');
+    this.logger.log(`CostTracker instance ${costTracker ? 'replaced' : 'removed'} via plugin/method call.`);
   }
 
 } // End of OpenRouterClient class
