@@ -1,279 +1,162 @@
-// Path: utils/json-utils.ts
 /**
- * JSON utilities: parsing, schema validation, conversion to string.
+ * JSON utilities: parsing, schema validation, serialization.
  * Uses Ajv for JSON Schema validation.
  */
 
-import Ajv, { ErrorObject, SchemaObject } from 'ajv';
-import { ValidationError } from './error';
+import Ajv, { ErrorObject, SchemaObject, ValidateFunction } from 'ajv';
+// Use relative path for error import
+import { ValidationError, ErrorCode } from './error';
+// Use relative path for logger import
 import { Logger } from './logger';
 
 const defaultLogger = new Logger({ debug: false, prefix: 'JsonUtils' });
-
 
 interface JsonUtilsOptions {
     logger?: Logger;
     ajvInstance?: Ajv;
 }
 
-let globalAjv: Ajv;
+let globalAjv: Ajv | null = null;
 let globalLogger: Logger = defaultLogger;
+const compiledSchemaCache = new Map<SchemaObject, ValidateFunction>();
 
-/**
- * Initializes or gets an Ajv instance for schema validation.
- * @param options - Options including existing Ajv instance.
- * @returns Ajv instance.
- * @private
- */
 function getAjvInstance(options?: JsonUtilsOptions): Ajv {
     if (options?.ajvInstance) {
         return options.ajvInstance;
     }
     if (!globalAjv) {
-        // allErrors: collect all errors, not just the first one
-        // strict: recommended strict schema checks (can be disabled if needed)
-        globalAjv = new Ajv({ allErrors: true, strict: false });
+        globalAjv = new Ajv({ allErrors: true, strict: false, coerceTypes: false });
     }
     return globalAjv;
 }
 
-/**
- * Gets a logger instance to use inside functions.
- * @param options - Options including existing logger instance.
- * @returns Logger instance.
- * @private
- */
 function getLogger(options?: JsonUtilsOptions): Logger {
     return options?.logger || globalLogger;
 }
 
-/**
- * Safely parses a JSON string. In case of error, returns the default value.
- * Logs a warning on parsing error or if input is not a string.
- *
- * @template T - Expected type of parsing result.
- * @param jsonString - String to parse.
- * @param fallback - Value to return on parsing error.
- * @param options - Options including logger.
- * @returns Parsed object or fallback value.
- * @example
- * const data = safeParse('{"a": 1}', { a: 0 }); // { a: 1 }
- * const fallbackData = safeParse('{invalid json', { a: 0 }); // { a: 0 }
- */
 export function safeParse<T = any>(jsonString: string, fallback: T, options?: JsonUtilsOptions): T {
     const logger = getLogger(options);
     if (typeof jsonString !== 'string') {
-        logger.warn('safeParse called with non-string, returning fallback.', { inputType: typeof jsonString });
+        logger.warn('safeParse called with non-string input, returning fallback.', { inputType: typeof jsonString });
+        return fallback;
+    }
+    const trimmedString = jsonString.trim();
+    if (trimmedString === '') {
+        logger.debug('safeParse called with empty or whitespace string, returning fallback.');
         return fallback;
     }
     try {
-        // Check for empty string, as JSON.parse('') throws error
-        if (jsonString.trim() === '') {
-            logger.warn('safeParse called with empty or whitespace string, returning fallback.');
-            return fallback;
-        }
-        return JSON.parse(jsonString);
+        return JSON.parse(trimmedString);
     } catch (error) {
-        logger.warn(`JSON parsing error: ${(error as Error).message}. String (beginning): "${jsonString.substring(0, 100)}..."`);
+        logger.warn(`JSON parsing error: ${(error as Error).message}. Returning fallback. Input (start): "${trimmedString.substring(0, 100)}..."`);
         return fallback;
     }
 }
 
-/**
- * Parses a JSON string. In case of parsing error or if input is not a string,
- * throws a `ValidationError`. Handles empty string as empty object specifically for tool arguments.
- *
- * @param jsonString - String to parse.
- * @param entityName - Entity name (e.g., "arguments", "API response") to use in error message.
- * @param options - Options including logger.
- * @returns Parsed object.
- * @throws {ValidationError} If parsing fails or input is not a string (unless it's an empty string for arguments).
- */
 export function parseOrThrow(jsonString: string, entityName: string = 'JSON', options?: JsonUtilsOptions): any {
     const logger = getLogger(options);
 
     if (typeof jsonString !== 'string') {
-        const error = new ValidationError(`Invalid input for ${entityName}: expected string, got ${typeof jsonString}`);
+        const error = new ValidationError(`Invalid input for ${entityName}: expected a string, but received type ${typeof jsonString}.`, { inputType: typeof jsonString });
         logger.error(`parseOrThrow failed: ${error.message}`);
         throw error;
     }
 
     const trimmedString = jsonString.trim();
 
-    if ((trimmedString === '' || trimmedString === '{}') && entityName.includes('arguments')) {
+    if ((trimmedString === '' || trimmedString === '{}') && entityName.toLowerCase().includes('argument')) {
         logger.debug(`Parsed ${entityName}: empty string or '{}' treated as empty object.`);
         return {};
     }
 
-    // If the string is empty, but these are NOT arguments, we throw an error
     if (trimmedString === '') {
-        const error = new ValidationError(`Error parsing ${entityName}: empty or whitespace string provided`);
+        const error = new ValidationError(`Error parsing ${entityName}: received empty or whitespace string.`);
         logger.error(error.message);
         throw error;
     }
 
     try {
         const result = JSON.parse(trimmedString);
-        logger.debug(`Successfully parsed ${entityName} JSON`);
+        logger.debug(`Successfully parsed ${entityName} JSON.`);
         return result;
     } catch (error) {
-        // If error is already ValidationError, just rethrow
-        if (error instanceof ValidationError) {
-            throw error;
-        }
-
-        // Otherwise, create ValidationError with original message
         const message = error instanceof Error ? error.message : String(error);
-        const wrappedError = new ValidationError(`Error parsing ${entityName} JSON: ${message}`);
+        // Pass the correct ErrorCode to the constructor
+        const wrappedError = new ValidationError(
+            `Error parsing ${entityName} JSON: ${message}`,
+            {
+                originalError: error,
+                inputPreview: trimmedString.length > 200 ? `${trimmedString.substring(0, 200)}...` : trimmedString
+            }
+        );
+        // wrappedError.code = ErrorCode.JSON_PARSE_ERROR; // Cannot assign to readonly property
         logger.error(`parseOrThrow failed: ${wrappedError.message}`);
-
-        // Include original error details
-        wrappedError.details = {
-            original: error,
-            input: trimmedString.length > 200 ? `${trimmedString.substring(0, 200)}...` : trimmedString
-        };
-
-        throw wrappedError;
+        throw wrappedError; // ValidationError constructor now handles setting the code based on message
     }
 }
 
-/**
- * Safely converts value to JSON string. In case of error, returns the default string.
- * Handles circular references and other serialization issues.
- *
- * @param value - Any value to convert to JSON string.
- * @param fallback - Default string to return if serialization fails.
- * @param options - Options including logger.
- * @returns JSON string or fallback.
- * @example
- * const str = safeStringify({ a: 1 }, 'error'); // '{"a":1}'
- * const errStr = safeStringify(circular, 'error'); // 'error'
- */
 export function safeStringify(value: any, fallback: string = '{"error":"JSON serialization failed"}', options?: JsonUtilsOptions): string {
     const logger = getLogger(options);
-    
-    if (value === undefined) {
-        logger.debug('safeStringify called with undefined value, returning null JSON string.');
-        return 'null';
-    }
-    
     try {
+        if (value === undefined) {
+            logger.debug('safeStringify called with undefined value, returning "null" string.');
+            return 'null';
+        }
         return JSON.stringify(value);
     } catch (error) {
-        logger.warn(`JSON stringify error: ${(error as Error).message}. Returning fallback.`);
+        logger.warn(`JSON stringify error: ${(error as Error).message}. Returning fallback string. Value type: ${typeof value}`);
         return fallback;
     }
 }
 
-/**
- * Converts a value to JSON string. In case of serialization error,
- * throws a `ValidationError`.
- *
- * @param value - Value to serialize.
- * @param entityName - Entity name (e.g., "result", "response") to use in error message.
- * @param options - Options including logger.
- * @returns JSON string.
- * @throws {ValidationError} If serialization fails.
- * @example
- * try {
- *   const json = stringifyOrThrow({ result: 123 }, 'calculation result');
- *   console.log(json); // '{"result":123}'
- * } catch (e) {
- *   console.error(e.message); // "Error serializing calculation result to JSON: ..."
- * }
- */
 export function stringifyOrThrow(value: any, entityName: string = 'value', options?: JsonUtilsOptions): string {
     const logger = getLogger(options);
-    
     try {
         if (value === undefined) {
-            logger.debug(`stringifyOrThrow: ${entityName} is undefined, returning null JSON string.`);
+            logger.debug(`stringifyOrThrow: ${entityName} is undefined, returning "null" JSON string.`);
             return 'null';
         }
-        
         const result = JSON.stringify(value);
-        logger.debug(`Successfully serialized ${entityName} to JSON string`);
+        logger.debug(`Successfully serialized ${entityName} to JSON string.`);
         return result;
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        const wrappedError = new ValidationError(`Error serializing ${entityName} to JSON: ${message}`);
-        logger.error(`stringifyOrThrow failed: ${wrappedError.message}`);
-        
-        // Add details about what we tried to stringify
-        let details: any = { 
-            valueType: typeof value
-        };
-        
-        // Try to add safe information about the value
-        if (value === null) {
-            details.value = null;
-        } else if (typeof value === 'object') {
-            try {
-                details.keys = Object.keys(value);
-                details.isArray = Array.isArray(value);
-                if (Array.isArray(value)) {
-                    details.length = value.length;
-                }
-            } catch (e) {
-                details.inspectionError = (e as Error).message;
-            }
-        } else {
-            // For primitives we can safely add the value
-            details.value = value;
+        let valueContext = `Type: ${typeof value}`;
+        if (typeof value === 'object' && value !== null) {
+            valueContext += `, Keys: ${Object.keys(value).slice(0, 5).join(', ')}${Object.keys(value).length > 5 ? '...' : ''}`;
         }
-        
-        wrappedError.details = details;
+
+        const wrappedError = new ValidationError(
+            `Error serializing ${entityName} to JSON: ${message}`,
+            { originalError: error, valueContext }
+        );
+        logger.error(`stringifyOrThrow failed: ${wrappedError.message}`);
         throw wrappedError;
     }
 }
 
-/**
- * Formats Ajv validation errors into a readable message.
- * @param errors - Array of Ajv error objects.
- * @returns Formatted error message.
- * @private
- */
-function formatAjvErrors(errors: ErrorObject[]): string {
+function formatAjvErrors(errors: ErrorObject[] | null | undefined): string {
     if (!errors || errors.length === 0) return 'Unknown validation error';
-    
+
     return errors.map(err => {
-        const path = err.instancePath ? err.instancePath : '<root>';
-        const message = err.message || 'unknown error';
-        
-        // Add additional details based on error keyword
-        let details = '';
-        if (err.keyword === 'required' && err.params && 'missingProperty' in err.params) {
-            details = ` (missing '${err.params.missingProperty}')`;
-        } else if (err.keyword === 'type' && err.params && 'type' in err.params) {
-            details = ` (expected ${err.params.type})`;
-        }
-        
-        return `${path} ${message}${details}`;
+        const path = err.instancePath || '<root>';
+        let message = err.message || 'Invalid value';
+        if (err.keyword === 'required') {
+            message = `Property '${err.params.missingProperty}' is required`;
+        } else if (err.keyword === 'type') {
+            message = `Expected type ${err.params.type} but received ${typeof err.data}`;
+        } else if (err.keyword === 'enum') {
+             message = `Value must be one of: ${err.params.allowedValues.join(', ')}`;
+         } else if (err.keyword === 'additionalProperties') {
+             message = `Property '${err.params.additionalProperty}' is not allowed`;
+         }
+        return `${path}: ${message}`;
     }).join('; ');
 }
 
-/**
- * Validates data against a JSON Schema.
- * Uses Ajv for validation.
- *
- * @param data - Data to validate.
- * @param schema - JSON Schema (as JavaScript object) to validate against.
- * @param entityName - Entity name (e.g., "tool arguments", "API response") to use in error messages.
- * @param options - Options including logger and Ajv instance.
- * @returns `true` if data is valid against schema.
- * @throws {ValidationError} If data doesn't conform to schema or error occurs during schema compilation.
- * @example
- * const schema = { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] };
- * try {
- *   validateJsonSchema({ name: 'Test' }, schema, 'User Data'); // true
- *   validateJsonSchema({ age: 30 }, schema, 'User Data'); // throws ValidationError
- * } catch (e) {
- *   console.error(e.message); // "User Data validation error: <root> must have required property 'name'"
- * }
- */
 export function validateJsonSchema(
     data: any,
-    schema: SchemaObject, // Using SchemaObject type from Ajv
+    schema: SchemaObject,
     entityName: string = 'data',
     options?: JsonUtilsOptions
 ): boolean {
@@ -281,73 +164,69 @@ export function validateJsonSchema(
     const logger = getLogger(options);
 
     if (!schema || typeof schema !== 'object') {
-        logger.error(`Invalid schema provided for ${entityName} validation`, { schema });
-        throw new ValidationError(`Invalid schema for ${entityName} validation: schema must be an object.`);
+        logger.error(`Invalid schema provided for ${entityName} validation: Schema must be an object.`, { schema });
+        throw new ValidationError(`Invalid schema provided for ${entityName}: Schema must be an object.`);
     }
 
+    let validate: ValidateFunction;
+
     try {
-        const validate = ajv.compile(schema);
+        if (compiledSchemaCache.has(schema)) {
+            validate = compiledSchemaCache.get(schema)!;
+             logger.debug(`Using cached compiled schema for ${entityName}.`);
+        } else {
+            validate = ajv.compile(schema);
+            compiledSchemaCache.set(schema, validate);
+             logger.debug(`Compiled and cached schema for ${entityName}.`);
+        }
+
         const valid = validate(data);
 
         if (!valid) {
-            // Errors definitely exist if valid === false
-            const errorMessage = formatAjvErrors(validate.errors!);
-            logger.warn(`Schema validation error for ${entityName}: ${errorMessage}`, { data, schema });
-            throw new ValidationError(`${entityName} validation error: ${errorMessage}`);
+            const errorMessage = formatAjvErrors(validate.errors);
+            logger.warn(`Schema validation failed for ${entityName}: ${errorMessage}`, { data, schemaErrors: validate.errors });
+            // Pass correct ErrorCode to constructor
+            const validationError = new ValidationError(
+                `${entityName} validation failed: ${errorMessage}`,
+                { schemaErrors: validate.errors, data }
+            );
+            // validationError.code = ErrorCode.JSON_SCHEMA_ERROR; // Cannot assign to readonly
+            throw validationError; // Constructor handles code based on message now
         }
 
-        logger.debug(`Schema validation for ${entityName} passed successfully.`);
+        logger.debug(`Schema validation passed successfully for ${entityName}.`);
         return true;
+
     } catch (error) {
-        // Catch schema compilation errors from Ajv or already thrown ValidationError
-        const errorMessage = error instanceof Error ? error.message : String(error);
-        logger.error(`Critical error during ${entityName} schema validation: ${errorMessage}`, { error });
+        const message = error instanceof Error ? error.message : String(error);
+        logger.error(`Critical error during ${entityName} schema validation: ${message}`, { error, schema });
+
         if (error instanceof ValidationError) {
-            // If it's already our validation error, just rethrow it
             throw error;
+        } else {
+            throw new ValidationError(`Error during ${entityName} schema validation: ${message}`, { originalError: error });
         }
-        // If it's a schema compilation error or other Ajv error
-        throw new ValidationError(`Error during ${entityName} schema validation: ${errorMessage}`);
     }
 }
 
-/**
- * Checks if the provided string is valid JSON.
- * Does not throw exceptions, returns boolean.
- *
- * @param jsonString - String to check.
- * @param options - Options including logger (for debug messages).
- * @returns `true` if string is valid JSON, otherwise `false`.
- * @example
- * isValidJsonString('{"a": 1}'); // true
- * isValidJsonString('{invalid'); // false
- * isValidJsonString('true'); // true
- * isValidJsonString('null'); // true
- * isValidJsonString('123'); // true
- * isValidJsonString('"string"'); // true
- * isValidJsonString(''); // false
- */
 export function isValidJsonString(jsonString: string, options?: JsonUtilsOptions): boolean {
     const logger = getLogger(options);
     if (typeof jsonString !== 'string' || jsonString.trim() === '') {
-        // Non-string or empty string is not valid JSON object/array/value in most cases
         return false;
     }
     try {
         JSON.parse(jsonString);
         return true;
     } catch (e) {
-         // Log only in debug mode, since this is expected behavior
          logger.debug(`String is not valid JSON: "${jsonString.substring(0, 100)}..."`);
         return false;
     }
 }
 
-
-export function setJsonUtilsLogger(logger: Logger) {
-    if (logger && typeof logger.debug === 'function') {
-        globalLogger = logger;
+export function setJsonUtilsLogger(loggerInstance: Logger) {
+    if (loggerInstance && typeof loggerInstance.debug === 'function') {
+        globalLogger = loggerInstance;
     } else {
-        console.error("Attempt to set invalid logger for JsonUtils");
+        console.error("[JsonUtils] Attempted to set an invalid logger instance.");
     }
 }
