@@ -144,6 +144,7 @@ export class OpenRouterClient {
         cleanupIntervalMs: config.historyCleanupInterval,
         // autoSave logic is now handled within the adapter itself
     });
+    this.logger.withPrefix('[UnifiedHistoryManager]')
     this.logger.log(`UnifiedHistoryManager initialized with adapter: ${historyAdapter.constructor.name}`);
 
     this.apiKey = config.apiKey;
