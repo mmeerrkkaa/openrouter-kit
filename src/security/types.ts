@@ -1,55 +1,72 @@
-// Path: security/types.ts
+// Path: src/security/types.ts
 import {
-  Tool,
+  Tool as BaseTool,
   UserAuthInfo as BaseUserAuthInfo,
   SecurityConfig as BaseSecurityConfig,
   ToolCallEvent as BaseToolCallEvent,
   RateLimit as BaseRateLimit,
   DangerousArgumentsConfig as BaseDangerousArgumentsConfig,
+  UserAuthConfig as BaseUserAuthConfig,
+  ToolAccessConfig as BaseToolAccessConfig,
+  RoleConfig as BaseRoleConfig,
 } from '../types';
 import type { Logger } from '../utils/logger';
-import type { SimpleEventEmitter } from '../utils/simple-event-emitter'; 
+import type { SimpleEventEmitter } from '../utils/simple-event-emitter';
 
+// --- Extended/Specific Types for Security Module ---
+
+// Rename RateLimit to avoid conflict with base type
 export interface ExtendedRateLimit extends BaseRateLimit {
   interval?: string | number;
 }
-export type RateLimit = ExtendedRateLimit;
+// Use the extended type within the security module where interval is needed
+// Base RateLimit is still available via import from '../types' if needed elsewhere
 
-export type UserAuthInfo = BaseUserAuthInfo & {
+// Rename UserAuthInfo to avoid conflict with base type
+export type ExtendedUserAuthInfo = BaseUserAuthInfo & {
   username?: string;
   roles?: string[];
   permissions?: string[];
   metadata?: Record<string, any>;
 };
 
-export type DangerousArgumentsConfig = BaseDangerousArgumentsConfig & {
+// Rename DangerousArgumentsConfig to avoid conflict with base type
+export type ExtendedDangerousArgumentsConfig = BaseDangerousArgumentsConfig & {
     extendablePatterns?: Array<string | RegExp>;
     auditOnlyMode?: boolean;
     specificKeyRules?: Record<string, any>;
 };
 
-export type SecurityConfig = BaseSecurityConfig & {
-  debug?: boolean;
+// Re-export base types that are used directly by security interfaces but not extended
+export type UserAuthConfig = BaseUserAuthConfig;
+export type ToolAccessConfig = BaseToolAccessConfig;
+export type RoleConfig = BaseRoleConfig;
+
+// Rename SecurityConfig to avoid conflict with base type
+export type ExtendedSecurityConfig = BaseSecurityConfig & {
+  debug: boolean; // Make debug required
   allowUnauthenticatedAccess?: boolean;
-  dangerousArguments?: DangerousArgumentsConfig; 
+  dangerousArguments?: ExtendedDangerousArgumentsConfig; // Use extended type
   toolConfig?: Record<string, {
       dangerousPatterns?: Array<string | RegExp>;
   }>;
 };
 
 export interface SecurityContext {
-  config: SecurityConfig;
+  config: ExtendedSecurityConfig; // Use extended SecurityConfig
   debug: boolean;
   userId?: string;
   toolName?: string;
 }
 
+// --- Interfaces for Security Components ---
+
 export interface ISecurityManager {
-  getConfig(): SecurityConfig;
-  updateConfig(config: Partial<SecurityConfig>): void;
-  authenticateUser(accessToken?: string): Promise<UserAuthInfo | null>;
-  createAccessToken(userInfo: Omit<UserAuthInfo, 'expiresAt'>, expiresIn?: string | number): string;
-  checkToolAccessAndArgs(tool: Tool, userInfo: UserAuthInfo | null, args?: any): Promise<boolean>;
+  getConfig(): ExtendedSecurityConfig; // Use extended SecurityConfig
+  updateConfig(config: Partial<ExtendedSecurityConfig>): void; // Use extended SecurityConfig
+  authenticateUser(accessToken?: string): Promise<ExtendedUserAuthInfo | null>; // Use extended UserAuthInfo
+  createAccessToken(userInfo: Omit<ExtendedUserAuthInfo, 'expiresAt'>, expiresIn?: string | number): string; // Use extended UserAuthInfo
+  checkToolAccessAndArgs(tool: BaseTool, userInfo: ExtendedUserAuthInfo | null, args?: any): Promise<boolean>; // Use BaseTool, extended UserAuthInfo
   logToolCall(event: ExtendedToolCallEvent): void;
   isDebugEnabled(): boolean;
   setDebugMode(debug: boolean): void;
@@ -61,32 +78,28 @@ export interface ISecurityManager {
 }
 
 export interface SecurityCheckParams {
-  tool: Tool;
-  userInfo: UserAuthInfo | null;
+  tool: BaseTool;
+  userInfo: ExtendedUserAuthInfo | null; // Use extended UserAuthInfo
   args?: any;
   context: SecurityContext;
   securityManager?: ISecurityManager;
 }
 
-export interface SecurityCheck {
-  validate(params: SecurityCheckParams): Promise<void> | void;
-}
-
 export interface TokenValidationResult {
   isValid: boolean;
-  userInfo?: UserAuthInfo;
+  userInfo?: ExtendedUserAuthInfo; // Use extended UserAuthInfo
   error?: Error;
 }
 
 export interface TokenConfig {
-  payload: Omit<UserAuthInfo, 'expiresAt'>;
+  payload: Omit<ExtendedUserAuthInfo, 'expiresAt'>; // Use extended UserAuthInfo
   expiresIn?: string | number;
 }
 
 export interface RateLimitParams {
   userId: string;
   toolName: string;
-  rateLimit: RateLimit;
+  rateLimit: ExtendedRateLimit; // Use extended RateLimit
   source?: string;
 }
 
@@ -98,12 +111,15 @@ export interface RateLimitResult {
   timeLeft?: number;
 }
 
+// --- Interfaces for Sub-Managers ---
+
 export interface IAuthManager {
-  authenticateUser(accessToken?: string): Promise<UserAuthInfo | null>;
+  authenticateUser(accessToken?: string): Promise<ExtendedUserAuthInfo | null>; // Use extended UserAuthInfo
   createAccessToken(config: TokenConfig): string;
   validateToken(token: string): Promise<TokenValidationResult>;
   clearTokenCache(): void;
   setDebugMode(debug: boolean): void;
+  updateSecret?(newSecret: string | undefined): void;
   destroy?(): void;
 }
 
@@ -121,19 +137,13 @@ export interface IRateLimitManager {
 }
 
 export interface IArgumentSanitizer {
-  validateArguments(tool: Tool, args: any, context: SecurityContext): Promise<void>;
+  validateArguments(tool: BaseTool, args: any, context: SecurityContext): Promise<void>;
   setDebugMode(debug: boolean): void;
   destroy?(): void;
 }
 
-// Re-export SimpleEventEmitter under the old name for compatibility if needed,
-// or preferably update all usages. Here we assume usages are updated.
-// We remove the ISecurityEventEmitter interface completely.
+// --- Event Payloads ---
 
 export interface ExtendedToolCallEvent extends BaseToolCallEvent {
   duration?: number;
-}
-
-export interface ISecurityLogger extends Logger {
-  logToolCall(event: ExtendedToolCallEvent): void;
 }
