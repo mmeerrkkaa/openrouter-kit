@@ -97,21 +97,21 @@ export class OpenRouterClient {
   private apiEndpoint: string;
   private apiBaseUrl: string;
   private model: string;
-  private debug: boolean; // Initialized in constructor via helper
+  private debug: boolean;
   private proxy: string | { host: string; port: number; user?: string; pass?: string } | null;
-  private headers: Record<string, string>; // Initialized in constructor via helper
-  private unifiedHistoryManager: UnifiedHistoryManager; // Initialized in constructor via helper
+  private headers: Record<string, string>;
+  private unifiedHistoryManager: UnifiedHistoryManager;
   private defaultProviderRouting?: ProviderRoutingConfig;
   private modelFallbacks: string[];
-  private axiosInstance: AxiosInstance; // Initialized in constructor via helper
+  private axiosInstance: AxiosInstance;
   private defaultResponseFormat: ResponseFormat | null;
-  private securityManager: SecurityManager | null; // Initialized in constructor via helper
-  private logger: Logger; // Initialized in constructor via helper
+  private securityManager: SecurityManager | null;
+  private logger: Logger;
   private strictJsonParsing: boolean;
-  private clientEventEmitter: SimpleEventEmitter; // Initialized in constructor via helper
+  private clientEventEmitter: SimpleEventEmitter;
   private axiosConfig?: AxiosRequestConfig;
   private defaultMaxToolCalls: number;
-  private costTracker: CostTracker | null; // Initialized in constructor via helper
+  private costTracker: CostTracker | null;
   private plugins: OpenRouterPlugin[] = [];
   private middlewares: MiddlewareFunction[] = [];
 
@@ -120,7 +120,7 @@ export class OpenRouterClient {
   private webSearch: boolean;
 
   constructor(config: OpenRouterConfig) {
-    validateConfig(config); // Validate the incoming configuration first
+    validateConfig(config);
 
     // --- Initialize core components first ---
     this.debug = config.debug ?? false;
@@ -130,7 +130,7 @@ export class OpenRouterClient {
     this.logger.log('Initializing OpenRouter Kit...');
 
     // --- Initialize Managers and Configuration ---
-    this.unifiedHistoryManager = this._initializeHistoryManager(config); // Assign result
+    this.unifiedHistoryManager = this._initializeHistoryManager(config);
     this.apiKey = config.apiKey;
     this.apiEndpoint = config.apiEndpoint || API_ENDPOINT;
     this.apiBaseUrl = DEFAULT_API_BASE_URL;
@@ -141,7 +141,7 @@ export class OpenRouterClient {
     this.defaultMaxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
 
     this.proxy = this._processProxyConfig(config);
-    this.headers = this._initializeHeaders(config); // Assign result
+    this.headers = this._initializeHeaders(config);
 
     this.strictJsonParsing = config.strictJsonParsing ?? false;
 
@@ -154,19 +154,16 @@ export class OpenRouterClient {
     this.webSearch = config.webSearch || false;
 
     // --- Initialize components that might depend on others ---
-    this.securityManager = this._initializeSecurityManager(config); // Assign result
-    this.axiosInstance = this._initializeAxiosInstance(config); // Assign result
-    this.costTracker = this._initializeCostTracker(config); // Assign result
+    this.securityManager = this._initializeSecurityManager(config);
+    this.axiosInstance = this._initializeAxiosInstance(config);
+    this.costTracker = this._initializeCostTracker(config);
 
     this.logger.log('OpenRouter Kit successfully initialized.');
   }
 
   // --- Initialization Helpers ---
 
-  // No longer needed as initialization happens directly in constructor
-  // private _initializeLoggerAndEvents(config: OpenRouterConfig): void { ... }
-
-  private _initializeHistoryManager(config: OpenRouterConfig): UnifiedHistoryManager { // Return the manager
+  private _initializeHistoryManager(config: OpenRouterConfig): UnifiedHistoryManager {
     let historyAdapter: IHistoryStorage;
     if (config.historyAdapter) {
         this.logger.log('Using custom history adapter for UnifiedHistoryManager.');
@@ -220,7 +217,7 @@ export class OpenRouterClient {
     return processedProxy;
   }
 
-  private _initializeHeaders(config: OpenRouterConfig): Record<string, string> { // Return headers
+  private _initializeHeaders(config: OpenRouterConfig): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${this.apiKey}`,
@@ -241,7 +238,7 @@ export class OpenRouterClient {
     return headers;
   }
 
-  private _initializeSecurityManager(config: OpenRouterConfig): SecurityManager | null { // Return manager or null
+  private _initializeSecurityManager(config: OpenRouterConfig): SecurityManager | null {
     if (config.security) {
       const manager = new SecurityManager(config.security, this.debug);
       this.logger.log('SecurityManager initialized.');
@@ -259,11 +256,11 @@ export class OpenRouterClient {
     }
   }
 
-  private _initializeAxiosInstance(config: OpenRouterConfig): AxiosInstance { // Return instance
+  private _initializeAxiosInstance(config: OpenRouterConfig): AxiosInstance {
     const baseAxiosConfig: AxiosRequestConfig = {
         baseURL: this.apiEndpoint,
         timeout: this.axiosConfig?.timeout ?? DEFAULT_TIMEOUT,
-        headers: this.headers, // Use already initialized headers
+        headers: this.headers,
     };
 
     const mergedConfig: AxiosRequestConfig = {
@@ -313,7 +310,6 @@ export class OpenRouterClient {
          if (headersToLog?.Authorization) {
              headersToLog.Authorization = 'Bearer ***REDACTED***';
          }
-         // Ensure config.data exists before accessing properties
          const dataSummary = config.data && typeof config.data === 'object'
              ? { model: (config.data as any).model, messagesCount: (config.data as any).messages?.length, toolsCount: (config.data as any).tools?.length, otherKeys: Object.keys(config.data).filter(k => !['model', 'messages', 'tools'].includes(k)) }
              : typeof config.data;
@@ -365,7 +361,7 @@ export class OpenRouterClient {
      });
   }
 
-  private _initializeCostTracker(config: OpenRouterConfig): CostTracker | null { // Return tracker or null
+  private _initializeCostTracker(config: OpenRouterConfig): CostTracker | null {
     if (config.enableCostTracking) {
         this.logger.log('Cost tracking enabled. Initializing CostTracker...');
         const tracker = new CostTracker(this.axiosInstance, this.logger, {
@@ -450,7 +446,7 @@ export class OpenRouterClient {
        stop = null,
        logitBias = null,
        seed = null,
-       toolChoice = null,
+       toolChoice = null, // User's explicit choice
        parallelToolCalls = undefined,
        route = undefined,
        transforms = undefined,
@@ -463,7 +459,7 @@ export class OpenRouterClient {
      // --- Handle :online suffix for Web Search Plugin ---
      let finalPlugins = plugins;
      if (modelToUse.endsWith(':online')) {
-         modelToUse = modelToUse.replace(/:online$/, ''); // Remove suffix
+         modelToUse = modelToUse.replace(/:online$/, '');
          this.logger.debug(`':online' suffix detected. Ensuring 'web' plugin is included.`);
          const webPluginConfig: PluginConfig = { id: 'web' };
          if (!finalPlugins) {
@@ -538,7 +534,8 @@ export class OpenRouterClient {
             messages: messagesForApi,
             tools: tools?.map(ToolHandler.formatToolForAPI) || null,
             responseFormat, temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
-            stop, logitBias, seed, toolChoice,
+            stop, logitBias, seed,
+            toolChoice: toolChoice, // Pass user's explicit choice
             parallelToolCalls: tools && tools.length > 0 ? (parallelToolCalls ?? true) : undefined,
             route, transforms, provider, models, plugins: finalPlugins, reasoning
         });
@@ -552,6 +549,7 @@ export class OpenRouterClient {
             temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
             stop, logitBias, seed, route, transforms, responseFormat, provider, models, plugins: finalPlugins, reasoning,
             parallelToolCalls: tools && tools.length > 0 ? (parallelToolCalls ?? true) : undefined
+            // Do NOT pass toolChoice down automatically here, let the next _buildRequestBody handle it
         };
         const handleResult = await this._handleApiResponse({
             response: initialResponse,
@@ -703,115 +701,123 @@ export class OpenRouterClient {
            if (msg.name) {
                filteredMsg.name = msg.name;
            }
-           // Exclude reasoning and annotations from history sent to API
            return filteredMsg as Message;
        }).filter(msg => msg !== null);
    }
 
    private _buildRequestBody(params: {
-     model: string;
-     messages: Message[];
-     tools?: Tool[] | null;
-     responseFormat?: ResponseFormat | null;
-     temperature?: number;
-     maxTokens?: number | null;
-     topP?: number | null;
-     presencePenalty?: number | null;
-     frequencyPenalty?: number | null;
-     stop?: string | string[] | null;
-     logitBias?: Record<string, number> | null;
-     seed?: number | null;
-     toolChoice?: OpenRouterRequestOptions['toolChoice'] | null;
-     parallelToolCalls?: boolean;
-     route?: string;
-     transforms?: string[];
-     provider?: ProviderRoutingConfig;
-     models?: string[];
-     plugins?: PluginConfig[];
-     reasoning?: ReasoningConfig;
-   }): Record<string, any> {
-     const {
-         model,
-         messages, tools,
-         responseFormat, temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
-         stop, logitBias, seed, toolChoice, parallelToolCalls, route, transforms,
-         provider, models, plugins, reasoning
-     } = params;
+    model: string;
+    messages: Message[];
+    tools?: Tool[] | null;
+    responseFormat?: ResponseFormat | null;
+    temperature?: number;
+    maxTokens?: number | null;
+    topP?: number | null;
+    presencePenalty?: number | null;
+    frequencyPenalty?: number | null;
+    stop?: string | string[] | null;
+    logitBias?: Record<string, number> | null;
+    seed?: number | null;
+    toolChoice?: OpenRouterRequestOptions['toolChoice'] | null; // User's explicit choice
+    parallelToolCalls?: boolean;
+    route?: string;
+    transforms?: string[];
+    provider?: ProviderRoutingConfig;
+    models?: string[];
+    plugins?: PluginConfig[];
+    reasoning?: ReasoningConfig;
+  }): Record<string, any> {
+    const {
+        model,
+        messages, tools,
+        responseFormat, temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
+        stop, logitBias, seed,
+        toolChoice, // User's explicit choice from options
+        parallelToolCalls, route, transforms,
+        provider, models, plugins, reasoning
+    } = params;
 
-     const apiMessages = this._filterHistoryForApi(messages);
+    const apiMessages = this._filterHistoryForApi(messages);
 
-     const body: Record<string, any> = {
-       ...(models && models.length > 0 ? { models: models } : { model: model }),
-       messages: apiMessages,
-       ...(temperature !== undefined && { temperature: temperature }),
-     };
+    const body: Record<string, any> = {
+      ...(models && models.length > 0 ? { models: models } : { model: model }),
+      messages: apiMessages,
+      ...(temperature !== undefined && { temperature: temperature }),
+    };
 
-     if (maxTokens != null && maxTokens > 0) body.max_tokens = maxTokens;
-     if (topP != null) body.top_p = topP;
-     if (presencePenalty != null) body.presence_penalty = presencePenalty;
-     if (frequencyPenalty != null) body.frequency_penalty = frequencyPenalty;
-     if (stop != null && (typeof stop === 'string' && stop !== '' || Array.isArray(stop) && stop.length > 0)) body.stop = stop;
-     if (logitBias != null && Object.keys(logitBias).length > 0) body.logit_bias = logitBias;
-     if (seed != null) body.seed = seed;
+    if (maxTokens != null && maxTokens > 0) body.max_tokens = maxTokens;
+    if (topP != null) body.top_p = topP;
+    if (presencePenalty != null) body.presence_penalty = presencePenalty;
+    if (frequencyPenalty != null) body.frequency_penalty = frequencyPenalty;
+    if (stop != null && (typeof stop === 'string' && stop !== '' || Array.isArray(stop) && stop.length > 0)) body.stop = stop;
+    if (logitBias != null && Object.keys(logitBias).length > 0) body.logit_bias = logitBias;
+    if (seed != null) body.seed = seed;
 
-     if (tools && tools.length > 0) {
-         body.tools = tools.map(t => ({ type: t.type, function: t.function }));
-         if (toolChoice != null) {
-              body.tool_choice = toolChoice;
-          } else {
-              body.tool_choice = 'auto';
+    if (tools && tools.length > 0) {
+        body.tools = tools.map(t => ({ type: t.type, function: t.function }));
+
+        if (toolChoice != null) {
+             body.tool_choice = toolChoice;
+             this.logger.debug(`Using explicitly provided tool_choice: ${JSON.stringify(toolChoice)}`);
+         } else {
+             body.tool_choice = 'auto';
+             this.logger.debug(`Tools provided but tool_choice not specified, defaulting to 'auto'.`);
+         }
+        body.parallel_tool_calls = parallelToolCalls ?? true;
+    } else {
+         if (toolChoice === 'none') {
+             body.tool_choice = 'none';
+             this.logger.debug(`No tools provided, but using explicitly provided tool_choice: 'none'`);
+         }
+    }
+    // --- End Tool Configuration ---
+
+
+    if (responseFormat) {
+      if (responseFormat.type === 'json_object') {
+           body.response_format = { type: 'json_object' };
+           this.logger.debug('Requested response format: json_object');
+      } else if (responseFormat.type === 'json_schema' && responseFormat.json_schema?.schema && responseFormat.json_schema?.name) {
+          const schemaPayload: any = {
+              name: responseFormat.json_schema.name,
+              schema: responseFormat.json_schema.schema,
+          };
+          if (responseFormat.json_schema.strict !== undefined) {
+              schemaPayload.strict = responseFormat.json_schema.strict;
+              this.logger.debug(`JSON Schema strict mode: ${responseFormat.json_schema.strict}`);
           }
-         body.parallel_tool_calls = parallelToolCalls ?? true;
-     } else {
-          if (toolChoice === 'none') {
-              body.tool_choice = 'none';
+          if (responseFormat.json_schema.description) {
+              schemaPayload.description = responseFormat.json_schema.description;
           }
-     }
-
-     if (responseFormat) {
-       if (responseFormat.type === 'json_object') {
-            body.response_format = { type: 'json_object' };
-            this.logger.debug('Requested response format: json_object');
-       } else if (responseFormat.type === 'json_schema' && responseFormat.json_schema?.schema && responseFormat.json_schema?.name) {
-           const schemaPayload: any = {
-               name: responseFormat.json_schema.name,
-               schema: responseFormat.json_schema.schema,
-           };
-           if (responseFormat.json_schema.strict !== undefined) {
-               schemaPayload.strict = responseFormat.json_schema.strict;
-               this.logger.debug(`JSON Schema strict mode: ${responseFormat.json_schema.strict}`);
+          body.response_format = { type: 'json_schema', json_schema: schemaPayload };
+          this.logger.debug(`Requested response format: json_schema (name: ${responseFormat.json_schema.name})`);
+      } else if (responseFormat.type === 'json_schema') {
+          this.logger.warn('Invalid responseFormat for json_schema: missing `json_schema` object with `name` and `schema`. Ignored.', responseFormat);
+      } else {
+           if (responseFormat.type) {
+               this.logger.warn('Unknown responseFormat type. Ignored.', responseFormat);
            }
-           if (responseFormat.json_schema.description) {
-               schemaPayload.description = responseFormat.json_schema.description;
-           }
-           body.response_format = { type: 'json_schema', json_schema: schemaPayload };
-           this.logger.debug(`Requested response format: json_schema (name: ${responseFormat.json_schema.name})`);
-       } else if (responseFormat.type === 'json_schema') {
-           this.logger.warn('Invalid responseFormat for json_schema: missing `json_schema` object with `name` and `schema`. Ignored.', responseFormat);
-       } else {
-            if (responseFormat.type) {
-                this.logger.warn('Unknown responseFormat type. Ignored.', responseFormat);
-            }
-       }
-     }
+      }
+    }
 
-     if (route) body.route = route;
-     if (transforms && transforms.length > 0) body.transforms = transforms;
-     if (provider) body.provider = provider;
-     if (plugins && plugins.length > 0) body.plugins = plugins;
-     if (reasoning) body.reasoning = reasoning;
+    if (route) body.route = route;
+    if (transforms && transforms.length > 0) body.transforms = transforms;
+    if (provider) body.provider = provider;
+    if (plugins && plugins.length > 0) body.plugins = plugins;
+    if (reasoning) body.reasoning = reasoning;
 
-     // Handle model fallbacks only if request-level 'models' array wasn't provided
-     if (!models && this.modelFallbacks.length > 0) {
-         body.models = [model, ...this.modelFallbacks];
-         delete body.model; // Remove single model if models array is used
-         this.logger.debug(`Using model list (primary + config fallbacks): ${body.models.join(', ')}`);
-     } else if (models && models.length > 0) {
-         this.logger.debug(`Using model list from request options: ${models.join(', ')}`);
-     }
+    // Handle model fallbacks only if request-level 'models' array wasn't provided
+    if (!models && this.modelFallbacks.length > 0) {
+        body.models = [model, ...this.modelFallbacks];
+        delete body.model; // Remove single model if models array is used
+        this.logger.debug(`Using model list (primary + config fallbacks): ${body.models.join(', ')}`);
+    } else if (models && models.length > 0) {
+        this.logger.debug(`Using model list from request options: ${models.join(', ')}`);
+    }
 
-     return body;
-   }
+    return body;
+  }
+
 
    private async _sendRequest(requestBody: Record<string, any>, depth: number): Promise<AxiosResponse<OpenRouterResponse>> {
       this.logger.debug(`(Depth ${depth}) Sending request to API... Model(s): ${requestBody.models ? requestBody.models.join(', ') : requestBody.model}`);
@@ -826,21 +832,16 @@ export class OpenRouterClient {
                   name: m.name
               })) || [];
               const toolsSummary = requestBody.tools?.map((t: Tool) => ({ type: t.type, name: t.function?.name })) || [];
-              // Filter out messages and tools to get other data
               const otherKeys = Object.keys(requestBody).filter(k => !['messages', 'tools'].includes(k));
-              // Build otherData safely
               const otherData = otherKeys.reduce((acc, key) => {
-                  // Check if key exists before assigning
                   if (requestBody[key] !== undefined) {
                       (acc as any)[key] = requestBody[key];
                   }
                   return acc;
-              }, {} as Record<string, any>); // Start with typed empty object
+              }, {} as Record<string, any>);
 
-              // Redact sensitive info like provider API keys if they exist in the provider object
               if (otherData.provider && typeof otherData.provider === 'object') {
-                  // Example redaction - adjust based on actual sensitive fields
-                  // otherData.provider = { ...otherData.provider, apiKey: '***REDACTED***' };
+                  // Add redaction logic if provider config contains sensitive keys
               }
 
               this.logger.debug(`(Depth ${depth}) Request Body Details:`, {
@@ -936,11 +937,14 @@ export class OpenRouterClient {
            const apiErrorData = responseData.error as any;
            const message = apiErrorData.message || `Unknown API error at depth ${depth}`;
            const code = apiErrorData.code || ErrorCode.API_ERROR;
+           // Use response status primarily, fall back to error body status if needed
            const statusCode = response.status || (typeof apiErrorData.status === 'number' ? apiErrorData.status : 500);
            this.logger.error(`(Depth ${depth}) API returned error in body:`, responseData.error);
+           // Map based on effective status code
            if (statusCode === 401) throw new AuthenticationError(message, statusCode, apiErrorData);
            if (statusCode === 403) throw new AccessDeniedError(message, statusCode, apiErrorData);
            if (statusCode === 429) throw new RateLimitError(message, statusCode, apiErrorData);
+           // Use APIError for other codes, including 400 from the provider
            throw new APIError(message, statusCode, { code, details: apiErrorData, depth });
        }
 
@@ -957,11 +961,9 @@ export class OpenRouterClient {
              throw new APIError(`API response choice at depth ${depth} missing 'message' field`, response.status || 500, responseData);
        }
 
-       // Add timestamp and potentially other fields before adding to history
        const assistantMessageWithTimestamp: Message = {
            ...assistantMessageFromAPI,
            timestamp: formatDateTime(),
-           // Ensure reasoning and annotations are included if present
            reasoning: assistantMessageFromAPI.reasoning ?? null,
            annotations: assistantMessageFromAPI.annotations ?? [],
         };
@@ -1014,9 +1016,10 @@ export class OpenRouterClient {
            this.logger.log(`(Depth ${depth}) Sending tool results back to LLM...`);
            const nextRequestBody = this._buildRequestBody({
                ...requestOptions,
-               model: responseModel, // Use the model that responded
+               model: responseModel,
                messages: currentMessages,
                tools: tools?.map(ToolHandler.formatToolForAPI) || null,
+               // Explicitly set toolChoice to 'auto' for the next step after receiving tool results
                toolChoice: 'auto',
            });
 
@@ -1060,7 +1063,6 @@ export class OpenRouterClient {
 
            const cost = this.costTracker?.calculateCost(responseModel, currentCumulativeUsage) ?? null;
 
-           // Extract reasoning and annotations from the final message added to history
            const finalAssistantMessage = currentMessages[currentMessages.length - 1];
            const reasoning = finalAssistantMessage?.reasoning ?? null;
            const annotations = finalAssistantMessage?.annotations ?? [];
@@ -1144,7 +1146,6 @@ export class OpenRouterClient {
     }
      this.logger.log(`Requesting access token creation for user ${userInfo.userId} (validity: ${expiresIn ?? 'default'})...`);
     try {
-        // SecurityManager expects the extended type, cast if necessary or ensure compatibility
         return this.securityManager.createAccessToken(userInfo as Omit<import('./security/types').ExtendedUserAuthInfo, 'expiresAt'>, expiresIn);
     } catch (error) {
          throw mapError(error);
@@ -1280,7 +1281,7 @@ export class OpenRouterClient {
 
      if (this.securityManager) {
          const currentSecConfig = this.securityManager.getConfig();
-         secConfig = currentSecConfig as BaseSecurityConfig; // Cast for basic checks if needed
+         secConfig = currentSecConfig as BaseSecurityConfig;
 
          if (params.accessToken) {
              try {
@@ -1301,7 +1302,7 @@ export class OpenRouterClient {
      try {
         const toolResultsMessages = await ToolHandler.handleToolCalls({
            message: params.message as Message & { tool_calls: ToolCall[] },
-           debug: this.debug, // Use client debug state
+           debug: this.debug,
            tools: params.tools ?? [],
            securityManager: this.securityManager || undefined,
            userInfo: userInfo,
@@ -1372,4 +1373,4 @@ export class OpenRouterClient {
     this.logger.log(`CostTracker instance ${costTracker ? 'replaced' : 'removed'} via plugin/method call.`);
   }
 
-} // End of OpenRouterClient class
+} 
