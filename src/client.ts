@@ -8,9 +8,9 @@ import {
   Message,
   Tool,
   ResponseFormat,
-  UserAuthInfo, // Base UserAuthInfo from core types
-  SecurityConfig as BaseSecurityConfig, // Use Base prefix for clarity and import base type
-  ProviderPreferences,
+  UserAuthInfo,
+  SecurityConfig as BaseSecurityConfig, // Keep base type if needed elsewhere
+  ProviderRoutingConfig,
   ToolCall,
   UsageInfo,
   ChatCompletionResult,
@@ -20,12 +20,13 @@ import {
   MiddlewareFunction,
   MiddlewareContext,
   IHistoryStorage,
-  HistoryStorageType, // Keep legacy type for config parsing if needed
+  PluginConfig,
+  ReasoningConfig,
+  UrlCitationAnnotation
 } from './types';
-// Removed legacy HistoryManager import
 import { ToolHandler } from './tool-handler';
 import { formatMessages, formatResponseForDisplay, formatDateTime } from './utils/formatting';
-import { validateConfig } from './utils/validation';
+import { validateConfig, validateProviderRoutingConfig, validateReasoningConfig } from './utils/validation';
 import {
     mapError,
     OpenRouterError,
@@ -49,10 +50,8 @@ import {
   DEFAULT_MODEL,
   DEFAULT_TIMEOUT,
   DEFAULT_TEMPERATURE,
-  MAX_HISTORY_ENTRIES,
   DEFAULT_CHATS_FOLDER
 } from './config';
-// Import SecurityManager itself, not its config type here
 import { SecurityManager } from './security/security-manager';
 import { SimpleEventEmitter } from './utils/simple-event-emitter';
 import { CostTracker } from './cost-tracker';
@@ -88,6 +87,8 @@ interface HandleApiResponseResult {
     finishReason: string | null;
     id?: string;
     cost?: number | null;
+    reasoning?: string | null;
+    annotations?: UrlCitationAnnotation[];
 }
 
 
@@ -96,37 +97,76 @@ export class OpenRouterClient {
   private apiEndpoint: string;
   private apiBaseUrl: string;
   private model: string;
-  private debug: boolean;
+  private debug: boolean; // Initialized in constructor via helper
   private proxy: string | { host: string; port: number; user?: string; pass?: string } | null;
-  private headers: Record<string, string>;
-  private unifiedHistoryManager: UnifiedHistoryManager; // Now mandatory
-  private providerPreferences?: ProviderPreferences;
+  private headers: Record<string, string>; // Initialized in constructor via helper
+  private unifiedHistoryManager: UnifiedHistoryManager; // Initialized in constructor via helper
+  private defaultProviderRouting?: ProviderRoutingConfig;
   private modelFallbacks: string[];
-  private enableReasoning: boolean; // Consider removing if unused
-  private webSearch: boolean; // Consider removing if unused
-  private axiosInstance: AxiosInstance;
+  private axiosInstance: AxiosInstance; // Initialized in constructor via helper
   private defaultResponseFormat: ResponseFormat | null;
-  private securityManager: SecurityManager | null;
-  private logger: Logger;
+  private securityManager: SecurityManager | null; // Initialized in constructor via helper
+  private logger: Logger; // Initialized in constructor via helper
   private strictJsonParsing: boolean;
-  private clientEventEmitter: SimpleEventEmitter;
+  private clientEventEmitter: SimpleEventEmitter; // Initialized in constructor via helper
   private axiosConfig?: AxiosRequestConfig;
   private defaultMaxToolCalls: number;
-  private costTracker: CostTracker | null;
+  private costTracker: CostTracker | null; // Initialized in constructor via helper
   private plugins: OpenRouterPlugin[] = [];
   private middlewares: MiddlewareFunction[] = [];
 
-  constructor(config: OpenRouterConfig) { // config here uses the type from ./types which includes the base SecurityConfig
-    validateConfig(config);
+  // Deprecated/Unused flags
+  private enableReasoning: boolean;
+  private webSearch: boolean;
 
+  constructor(config: OpenRouterConfig) {
+    validateConfig(config); // Validate the incoming configuration first
+
+    // --- Initialize core components first ---
     this.debug = config.debug ?? false;
     this.logger = new Logger({ debug: this.debug, prefix: 'OpenRouterClient' });
     jsonUtils.setJsonUtilsLogger(this.logger.withPrefix('JsonUtils'));
     this.clientEventEmitter = new SimpleEventEmitter();
-
     this.logger.log('Initializing OpenRouter Kit...');
 
-    // Initialize Unified History Manager
+    // --- Initialize Managers and Configuration ---
+    this.unifiedHistoryManager = this._initializeHistoryManager(config); // Assign result
+    this.apiKey = config.apiKey;
+    this.apiEndpoint = config.apiEndpoint || API_ENDPOINT;
+    this.apiBaseUrl = DEFAULT_API_BASE_URL;
+    this.logger.debug(`Using API base URL for auxiliary endpoints: ${this.apiBaseUrl}`);
+
+    this.model = config.model || DEFAULT_MODEL;
+    this.axiosConfig = config.axiosConfig;
+    this.defaultMaxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
+
+    this.proxy = this._processProxyConfig(config);
+    this.headers = this._initializeHeaders(config); // Assign result
+
+    this.strictJsonParsing = config.strictJsonParsing ?? false;
+
+    this.defaultProviderRouting = config.defaultProviderRouting;
+    this.modelFallbacks = config.modelFallbacks || [];
+    this.defaultResponseFormat = config.responseFormat || null;
+
+    // Deprecated flags initialization
+    this.enableReasoning = config.enableReasoning || false;
+    this.webSearch = config.webSearch || false;
+
+    // --- Initialize components that might depend on others ---
+    this.securityManager = this._initializeSecurityManager(config); // Assign result
+    this.axiosInstance = this._initializeAxiosInstance(config); // Assign result
+    this.costTracker = this._initializeCostTracker(config); // Assign result
+
+    this.logger.log('OpenRouter Kit successfully initialized.');
+  }
+
+  // --- Initialization Helpers ---
+
+  // No longer needed as initialization happens directly in constructor
+  // private _initializeLoggerAndEvents(config: OpenRouterConfig): void { ... }
+
+  private _initializeHistoryManager(config: OpenRouterConfig): UnifiedHistoryManager { // Return the manager
     let historyAdapter: IHistoryStorage;
     if (config.historyAdapter) {
         this.logger.log('Using custom history adapter for UnifiedHistoryManager.');
@@ -139,217 +179,209 @@ export class OpenRouterClient {
         }
         historyAdapter = new MemoryHistoryStorage();
     }
-    this.unifiedHistoryManager = new UnifiedHistoryManager(historyAdapter, {
+    const manager = new UnifiedHistoryManager(historyAdapter, {
         ttlMs: config.historyTtl,
         cleanupIntervalMs: config.historyCleanupInterval,
-        // autoSave logic is now handled within the adapter itself
-    });
-    this.logger.withPrefix('[UnifiedHistoryManager]')
+    }, this.logger.withPrefix('UnifiedHistoryManager'));
     this.logger.log(`UnifiedHistoryManager initialized with adapter: ${historyAdapter.constructor.name}`);
+    return manager;
+  }
 
-    this.apiKey = config.apiKey;
-    this.apiEndpoint = config.apiEndpoint || API_ENDPOINT;
-    this.apiBaseUrl = DEFAULT_API_BASE_URL;
-    this.logger.debug(`Using API base URL for auxiliary endpoints: ${this.apiBaseUrl}`);
-
-    this.model = config.model || DEFAULT_MODEL;
-    this.axiosConfig = config.axiosConfig;
-    this.defaultMaxToolCalls = config.maxToolCalls ?? DEFAULT_MAX_TOOL_CALLS;
-
+  private _processProxyConfig(config: OpenRouterConfig): typeof this.proxy {
     let processedProxy: typeof this.proxy = null;
-     if (config.proxy) {
-         if (typeof config.proxy === 'string') {
-             processedProxy = config.proxy;
-         } else if (typeof config.proxy === 'object' && config.proxy !== null) {
-             let portNumber: number;
-             if (typeof config.proxy.port === 'string') {
-                 portNumber = parseInt(config.proxy.port, 10);
-                 if (isNaN(portNumber)) {
-                     this.logger.error(`Internal validation inconsistency: Proxy port string '${config.proxy.port}' failed parsing after validation. Disabling proxy.`);
-                     portNumber = 0;
-                 }
-             } else {
-                 portNumber = config.proxy.port;
-             }
+    if (config.proxy) {
+        if (typeof config.proxy === 'string') {
+            processedProxy = config.proxy;
+        } else if (typeof config.proxy === 'object' && config.proxy !== null) {
+            let portNumber: number;
+            if (typeof config.proxy.port === 'string') {
+                portNumber = parseInt(config.proxy.port, 10);
+                if (isNaN(portNumber)) {
+                    this.logger.error(`Internal validation inconsistency: Proxy port string '${config.proxy.port}' failed parsing after validation. Disabling proxy.`);
+                    portNumber = 0;
+                }
+            } else {
+                portNumber = config.proxy.port;
+            }
 
-             if (portNumber > 0) {
-                 processedProxy = {
-                     ...config.proxy,
-                     port: portNumber,
-                 };
-             } else {
-                  processedProxy = null;
-             }
-         }
-     }
-     this.proxy = processedProxy;
+            if (portNumber > 0) {
+                processedProxy = {
+                    ...config.proxy,
+                    port: portNumber,
+                };
+            } else {
+                 processedProxy = null;
+            }
+        }
+    }
+    if (processedProxy) {
+      this.logger.log('Proxy configuration processed.');
+    }
+    return processedProxy;
+  }
 
-
-    this.headers = {
+  private _initializeHeaders(config: OpenRouterConfig): Record<string, string> { // Return headers
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${this.apiKey}`,
       'HTTP-Referer': config.referer ?? DEFAULT_REFERER_URL,
       'X-Title': config.title ?? DEFAULT_X_TITLE,
     };
 
-     if (config.axiosConfig?.headers) {
-         for (const [key, value] of Object.entries(config.axiosConfig.headers)) {
-              if (typeof value === 'string' && key.toLowerCase() !== 'authorization' && key.toLowerCase() !== 'content-type') {
-                  this.headers[key] = value;
-              }
-          }
-     }
-
-    this.logger.debug(`Using HTTP-Referer: ${this.headers['HTTP-Referer']}`);
-    this.logger.debug(`Using X-Title: ${this.headers['X-Title']}`);
-
-
-    this.strictJsonParsing = config.strictJsonParsing ?? false;
-
-    this.providerPreferences = config.providerPreferences || undefined;
-    this.modelFallbacks = config.modelFallbacks || [];
-    this.enableReasoning = config.enableReasoning || false;
-    this.webSearch = config.webSearch || false;
-    this.defaultResponseFormat = config.responseFormat || null;
-
-     // Pass the security part of the config to the SecurityManager constructor
-     if (config.security) {
-       this.securityManager = new SecurityManager(config.security, this.debug);
-       this.logger.log('SecurityManager initialized.');
-       if (this.debug) {
-         const secureConfigLog = this.securityManager.getConfig(); // Get the potentially extended config
-         if (secureConfigLog.userAuthentication?.jwtSecret) {
-              secureConfigLog.userAuthentication = { ...secureConfigLog.userAuthentication, jwtSecret: '***REDACTED***' };
+    if (config.axiosConfig?.headers) {
+        for (const [key, value] of Object.entries(config.axiosConfig.headers)) {
+             if (typeof value === 'string' && key.toLowerCase() !== 'authorization' && key.toLowerCase() !== 'content-type') {
+                 headers[key] = value;
+             }
          }
-         this.logger.debug('Effective Security settings:', secureConfigLog);
+    }
+
+    this.logger.debug(`Using HTTP-Referer: ${headers['HTTP-Referer']}`);
+    this.logger.debug(`Using X-Title: ${headers['X-Title']}`);
+    return headers;
+  }
+
+  private _initializeSecurityManager(config: OpenRouterConfig): SecurityManager | null { // Return manager or null
+    if (config.security) {
+      const manager = new SecurityManager(config.security, this.debug);
+      this.logger.log('SecurityManager initialized.');
+      if (this.debug) {
+        const secureConfigLog = manager.getConfig();
+        if (secureConfigLog.userAuthentication?.jwtSecret) {
+             secureConfigLog.userAuthentication = { ...secureConfigLog.userAuthentication, jwtSecret: '***REDACTED***' };
+        }
+        this.logger.debug('Effective Security settings:', secureConfigLog);
+      }
+      return manager;
+    } else {
+      this.logger.log('SecurityManager not used (security configuration missing).');
+      return null;
+    }
+  }
+
+  private _initializeAxiosInstance(config: OpenRouterConfig): AxiosInstance { // Return instance
+    const baseAxiosConfig: AxiosRequestConfig = {
+        baseURL: this.apiEndpoint,
+        timeout: this.axiosConfig?.timeout ?? DEFAULT_TIMEOUT,
+        headers: this.headers, // Use already initialized headers
+    };
+
+    const mergedConfig: AxiosRequestConfig = {
+        ...baseAxiosConfig,
+        ...this.axiosConfig,
+        headers: {
+            ...baseAxiosConfig.headers,
+            ...(this.axiosConfig?.headers || {}),
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.apiKey}`,
+        } as any,
+    };
+
+    const axiosInstance = axios.create(mergedConfig);
+    this.logger.debug('Axios instance created with config:', {
+        ...mergedConfig,
+        headers: {
+             ...mergedConfig.headers,
+             Authorization: mergedConfig.headers?.Authorization ? 'Bearer ***REDACTED***' : undefined
+        }
+    });
+
+    this._setupAxiosInterceptors(axiosInstance);
+    return axiosInstance;
+  }
+
+  private _setupAxiosInterceptors(instance: AxiosInstance): void {
+    instance.interceptors.request.use(config => {
+        config.headers = config.headers || new AxiosHeaders();
+        config.headers['Authorization'] = `Bearer ${this.apiKey}`;
+
+        if (this.proxy) {
+            this.logger.debug('Using proxy:', typeof this.proxy === 'string' ? this.proxy : `${this.proxy.host}:${this.proxy.port}`);
+            let proxyUrl: string;
+            if (typeof this.proxy === 'object') {
+                const auth = this.proxy.user ? `${encodeURIComponent(this.proxy.user)}:${encodeURIComponent(this.proxy.pass || '')}@` : '';
+                proxyUrl = `http://${auth}${this.proxy.host}:${this.proxy.port}`;
+            } else {
+                proxyUrl = this.proxy;
+            }
+             config.httpsAgent = new HttpsProxyAgent(proxyUrl);
+             config.proxy = false;
+        }
+
+       if (this.debug) {
+         const headersToLog = { ...config.headers.toJSON() };
+         if (headersToLog?.Authorization) {
+             headersToLog.Authorization = 'Bearer ***REDACTED***';
+         }
+         // Ensure config.data exists before accessing properties
+         const dataSummary = config.data && typeof config.data === 'object'
+             ? { model: (config.data as any).model, messagesCount: (config.data as any).messages?.length, toolsCount: (config.data as any).tools?.length, otherKeys: Object.keys(config.data).filter(k => !['model', 'messages', 'tools'].includes(k)) }
+             : typeof config.data;
+
+         let fullUrl = config.url || '';
+         if (config.baseURL && config.url) {
+             fullUrl = `${config.baseURL.replace(/\/$/, '')}/${config.url.replace(/^\//, '')}`;
+         } else if (config.baseURL && !config.url) {
+             fullUrl = config.baseURL;
+         }
+
+         this.logger.debug('Axios Request ->', {
+           method: config.method?.toUpperCase(),
+           url: fullUrl,
+           headers: headersToLog,
+           dataSummary: dataSummary
+         });
        }
-     } else {
-       this.securityManager = null;
-       this.logger.log('SecurityManager not used (security configuration missing).');
-     }
+       return config;
+    }, error => {
+        const mappedError = mapError(error);
+        this.logger.error('Axios Request Error:', mappedError.message, mappedError.details);
+        this._handleError(mappedError);
+        return Promise.reject(mappedError);
+    });
 
-    this.axiosInstance = this._createAxiosInstance();
+     instance.interceptors.response.use(response => {
+       if (this.debug) {
+         this.logger.debug('Axios Response <-', {
+           status: response.status,
+           statusText: response.statusText,
+           headers: response.headers,
+           dataSummary: { id: response.data?.id, model: response.data?.model, choicesCount: response.data?.choices?.length, usage: response.data?.usage, error: response.data?.error }
+         });
+       }
+       return response;
+     }, error => {
+        const mappedError = mapError(error);
+        if (this.debug) {
+             this.logger.error('Axios Response Error <-', {
+               message: mappedError.message,
+               code: mappedError.code,
+               statusCode: mappedError.statusCode,
+               details: mappedError.details,
+             });
+        }
+        this._handleError(mappedError);
+        return Promise.reject(mappedError);
+     });
+  }
 
+  private _initializeCostTracker(config: OpenRouterConfig): CostTracker | null { // Return tracker or null
     if (config.enableCostTracking) {
         this.logger.log('Cost tracking enabled. Initializing CostTracker...');
-        this.costTracker = new CostTracker(this.axiosInstance, this.logger, {
+        const tracker = new CostTracker(this.axiosInstance, this.logger, {
             enableCostTracking: true,
             priceRefreshIntervalMs: config.priceRefreshIntervalMs,
             initialModelPrices: config.initialModelPrices,
             apiBaseUrl: this.apiBaseUrl
         });
+        return tracker;
     } else {
-        this.costTracker = null;
         this.logger.log('Cost tracking disabled.');
+        return null;
     }
-
-    this.logger.log('OpenRouter Kit successfully initialized.');
   }
 
-  private _createAxiosInstance(): AxiosInstance {
-    const baseAxiosConfig: AxiosRequestConfig = {
-        baseURL: this.apiEndpoint,
-        timeout: this.axiosConfig?.timeout ?? DEFAULT_TIMEOUT,
-        headers: this.headers,
-    };
-
-     const mergedHeaders: Record<string, AxiosHeaderValue | undefined> = {
-         ...baseAxiosConfig.headers,
-         ...(this.axiosConfig?.headers || {}),
-         'Content-Type': 'application/json',
-         'Authorization': `Bearer ${this.apiKey}`,
-     };
-
-     const mergedConfig: AxiosRequestConfig = {
-         ...baseAxiosConfig,
-         ...this.axiosConfig,
-         headers: mergedHeaders as any
-     };
-
-     const axiosInstance = axios.create(mergedConfig);
-     this.logger.debug('Axios instance created with config:', {
-         ...mergedConfig,
-         headers: {
-              ...mergedHeaders,
-              Authorization: mergedHeaders.Authorization ? 'Bearer ***REDACTED***' : undefined
-         }
-     });
-
-     axiosInstance.interceptors.request.use(config => {
-         config.headers = config.headers || new AxiosHeaders();
-         config.headers['Authorization'] = `Bearer ${this.apiKey}`;
-
-         if (this.proxy) {
-             this.logger.debug('Using proxy:', typeof this.proxy === 'string' ? this.proxy : `${this.proxy.host}:${this.proxy.port}`);
-             let proxyUrl: string;
-             if (typeof this.proxy === 'object') {
-                 const auth = this.proxy.user ? `${encodeURIComponent(this.proxy.user)}:${encodeURIComponent(this.proxy.pass || '')}@` : '';
-                 proxyUrl = `http://${auth}${this.proxy.host}:${this.proxy.port}`;
-             } else {
-                 proxyUrl = this.proxy;
-             }
-              config.httpsAgent = new HttpsProxyAgent(proxyUrl);
-              config.proxy = false;
-         }
-
-        if (this.debug) {
-          const headersToLog = { ...config.headers.toJSON() };
-          if (headersToLog?.Authorization) {
-              headersToLog.Authorization = 'Bearer ***REDACTED***';
-          }
-          const dataSummary = config.data && typeof config.data === 'object'
-              ? { model: config.data.model, messagesCount: config.data.messages?.length, toolsCount: config.data.tools?.length, otherKeys: Object.keys(config.data).filter(k => !['model', 'messages', 'tools'].includes(k)) }
-              : typeof config.data;
-
-          let fullUrl = config.url || '';
-          if (config.baseURL && config.url) {
-              fullUrl = `${config.baseURL.replace(/\/$/, '')}/${config.url.replace(/^\//, '')}`;
-          } else if (config.baseURL && !config.url) {
-              fullUrl = config.baseURL;
-          }
-
-          this.logger.debug('Axios Request ->', {
-            method: config.method?.toUpperCase(),
-            url: fullUrl,
-            headers: headersToLog,
-            dataSummary: dataSummary
-          });
-        }
-        return config;
-     }, error => {
-         const mappedError = mapError(error);
-         this.logger.error('Axios Request Error:', mappedError.message, mappedError.details);
-         this._handleError(mappedError);
-         return Promise.reject(mappedError);
-     });
-
-      axiosInstance.interceptors.response.use(response => {
-        if (this.debug) {
-          this.logger.debug('Axios Response <-', {
-            status: response.status,
-            statusText: response.statusText,
-            headers: response.headers,
-            dataSummary: { id: response.data?.id, model: response.data?.model, choicesCount: response.data?.choices?.length, usage: response.data?.usage, error: response.data?.error }
-          });
-        }
-        return response;
-      }, error => {
-         const mappedError = mapError(error);
-         if (this.debug) {
-              this.logger.error('Axios Response Error <-', {
-                message: mappedError.message,
-                code: mappedError.code,
-                statusCode: mappedError.statusCode,
-                details: mappedError.details,
-              });
-         }
-         this._handleError(mappedError);
-         return Promise.reject(mappedError);
-      });
-
-    return axiosInstance;
-  }
-
+  // --- Core Chat Logic ---
 
   async chat(options: OpenRouterRequestOptions): Promise<ChatCompletionResult> {
     const ctx: MiddlewareContext = {
@@ -383,8 +415,22 @@ export class OpenRouterClient {
         : `customMessages: ${options.customMessages?.length ?? 0}`;
     this.logger.log(`Starting chat(${logIdentifier})...`);
 
+    // Validate specific request options
+    if (options.provider) {
+        validateProviderRoutingConfig(options.provider, 'options.provider');
+    }
+    if (options.reasoning) {
+        validateReasoningConfig(options.reasoning, 'options.reasoning');
+    }
+    if (options.models && (!Array.isArray(options.models) || !options.models.every(m => typeof m === 'string'))) {
+        throw new ConfigError("'models' option must be an array of strings if provided.");
+    }
+     if (options.plugins && (!Array.isArray(options.plugins) || !options.plugins.every(p => typeof p === 'object' && p !== null && typeof p.id === 'string'))) {
+         throw new ConfigError("'plugins' option must be an array of objects with an 'id' string property if provided.");
+     }
+
     const strictJsonParsing = options.strictJsonParsing ?? this.strictJsonParsing;
-    const modelToUse = options.model || this.model;
+    let modelToUse = options.model || this.model;
     const tools = options.tools || null;
     const maxToolCalls = options.maxToolCalls ?? this.defaultMaxToolCalls;
 
@@ -408,11 +454,29 @@ export class OpenRouterClient {
        parallelToolCalls = undefined,
        route = undefined,
        transforms = undefined,
+       provider = this.defaultProviderRouting,
+       models = undefined,
+       plugins = undefined,
+       reasoning = undefined,
      } = options;
 
+     // --- Handle :online suffix for Web Search Plugin ---
+     let finalPlugins = plugins;
+     if (modelToUse.endsWith(':online')) {
+         modelToUse = modelToUse.replace(/:online$/, ''); // Remove suffix
+         this.logger.debug(`':online' suffix detected. Ensuring 'web' plugin is included.`);
+         const webPluginConfig: PluginConfig = { id: 'web' };
+         if (!finalPlugins) {
+             finalPlugins = [webPluginConfig];
+         } else if (!finalPlugins.some(p => p.id === 'web')) {
+             finalPlugins.push(webPluginConfig);
+         }
+     }
+
+     // --- Authentication ---
      let userInfo: UserAuthInfo | null = null;
      if (this.securityManager) {
-         const secConfig = this.securityManager.getConfig(); // Get config once
+         const secConfig = this.securityManager.getConfig();
          if (accessToken) {
              try {
                  userInfo = await this.securityManager.authenticateUser(accessToken);
@@ -476,7 +540,7 @@ export class OpenRouterClient {
             responseFormat, temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
             stop, logitBias, seed, toolChoice,
             parallelToolCalls: tools && tools.length > 0 ? (parallelToolCalls ?? true) : undefined,
-            route, transforms
+            route, transforms, provider, models, plugins: finalPlugins, reasoning
         });
 
         // 4. Send request
@@ -486,7 +550,7 @@ export class OpenRouterClient {
         const recursiveRequestOptions: Partial<OpenRouterRequestOptions> & { model: string } = {
             model: modelToUse,
             temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
-            stop, logitBias, seed, route, transforms, responseFormat,
+            stop, logitBias, seed, route, transforms, responseFormat, provider, models, plugins: finalPlugins, reasoning,
             parallelToolCalls: tools && tools.length > 0 ? (parallelToolCalls ?? true) : undefined
         };
         const handleResult = await this._handleApiResponse({
@@ -530,7 +594,9 @@ export class OpenRouterClient {
             finishReason: handleResult.finishReason,
             durationMs: duration,
             id: handleResult.id,
-            cost: handleResult.cost
+            cost: handleResult.cost,
+            reasoning: handleResult.reasoning,
+            annotations: handleResult.annotations,
         };
         return finalResult;
 
@@ -623,8 +689,10 @@ export class OpenRouterClient {
    private _filterHistoryForApi(messages: Message[]): Message[] {
        return messages.map(msg => {
            const filteredMsg: Partial<Message> = { role: msg.role };
-           if (msg.content !== undefined) {
+           if (msg.content !== null && msg.content !== undefined) {
                filteredMsg.content = msg.content;
+           } else {
+               filteredMsg.content = null;
            }
            if (msg.tool_calls) {
                filteredMsg.tool_calls = msg.tool_calls;
@@ -635,6 +703,7 @@ export class OpenRouterClient {
            if (msg.name) {
                filteredMsg.name = msg.name;
            }
+           // Exclude reasoning and annotations from history sent to API
            return filteredMsg as Message;
        }).filter(msg => msg !== null);
    }
@@ -656,18 +725,23 @@ export class OpenRouterClient {
      parallelToolCalls?: boolean;
      route?: string;
      transforms?: string[];
+     provider?: ProviderRoutingConfig;
+     models?: string[];
+     plugins?: PluginConfig[];
+     reasoning?: ReasoningConfig;
    }): Record<string, any> {
      const {
          model,
          messages, tools,
          responseFormat, temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
-         stop, logitBias, seed, toolChoice, parallelToolCalls, route, transforms
+         stop, logitBias, seed, toolChoice, parallelToolCalls, route, transforms,
+         provider, models, plugins, reasoning
      } = params;
 
      const apiMessages = this._filterHistoryForApi(messages);
 
      const body: Record<string, any> = {
-       model: model,
+       ...(models && models.length > 0 ? { models: models } : { model: model }),
        messages: apiMessages,
        ...(temperature !== undefined && { temperature: temperature }),
      };
@@ -699,7 +773,18 @@ export class OpenRouterClient {
             body.response_format = { type: 'json_object' };
             this.logger.debug('Requested response format: json_object');
        } else if (responseFormat.type === 'json_schema' && responseFormat.json_schema?.schema && responseFormat.json_schema?.name) {
-           body.response_format = { type: 'json_schema', json_schema: responseFormat.json_schema };
+           const schemaPayload: any = {
+               name: responseFormat.json_schema.name,
+               schema: responseFormat.json_schema.schema,
+           };
+           if (responseFormat.json_schema.strict !== undefined) {
+               schemaPayload.strict = responseFormat.json_schema.strict;
+               this.logger.debug(`JSON Schema strict mode: ${responseFormat.json_schema.strict}`);
+           }
+           if (responseFormat.json_schema.description) {
+               schemaPayload.description = responseFormat.json_schema.description;
+           }
+           body.response_format = { type: 'json_schema', json_schema: schemaPayload };
            this.logger.debug(`Requested response format: json_schema (name: ${responseFormat.json_schema.name})`);
        } else if (responseFormat.type === 'json_schema') {
            this.logger.warn('Invalid responseFormat for json_schema: missing `json_schema` object with `name` and `schema`. Ignored.', responseFormat);
@@ -712,17 +797,24 @@ export class OpenRouterClient {
 
      if (route) body.route = route;
      if (transforms && transforms.length > 0) body.transforms = transforms;
-     if (this.providerPreferences) body.provider = this.providerPreferences;
-     if (this.modelFallbacks.length > 0) {
+     if (provider) body.provider = provider;
+     if (plugins && plugins.length > 0) body.plugins = plugins;
+     if (reasoning) body.reasoning = reasoning;
+
+     // Handle model fallbacks only if request-level 'models' array wasn't provided
+     if (!models && this.modelFallbacks.length > 0) {
          body.models = [model, ...this.modelFallbacks];
-         this.logger.debug(`Using model list (primary + fallbacks): ${body.models.join(', ')}`);
+         delete body.model; // Remove single model if models array is used
+         this.logger.debug(`Using model list (primary + config fallbacks): ${body.models.join(', ')}`);
+     } else if (models && models.length > 0) {
+         this.logger.debug(`Using model list from request options: ${models.join(', ')}`);
      }
 
      return body;
    }
 
    private async _sendRequest(requestBody: Record<string, any>, depth: number): Promise<AxiosResponse<OpenRouterResponse>> {
-      this.logger.debug(`(Depth ${depth}) Sending request to API... Model: ${requestBody.model}`);
+      this.logger.debug(`(Depth ${depth}) Sending request to API... Model(s): ${requestBody.models ? requestBody.models.join(', ') : requestBody.model}`);
 
       if (this.debug) {
           try {
@@ -734,8 +826,22 @@ export class OpenRouterClient {
                   name: m.name
               })) || [];
               const toolsSummary = requestBody.tools?.map((t: Tool) => ({ type: t.type, name: t.function?.name })) || [];
+              // Filter out messages and tools to get other data
               const otherKeys = Object.keys(requestBody).filter(k => !['messages', 'tools'].includes(k));
-              const otherData = otherKeys.reduce((acc, key) => ({ ...acc, [key]: requestBody[key] }), {});
+              // Build otherData safely
+              const otherData = otherKeys.reduce((acc, key) => {
+                  // Check if key exists before assigning
+                  if (requestBody[key] !== undefined) {
+                      (acc as any)[key] = requestBody[key];
+                  }
+                  return acc;
+              }, {} as Record<string, any>); // Start with typed empty object
+
+              // Redact sensitive info like provider API keys if they exist in the provider object
+              if (otherData.provider && typeof otherData.provider === 'object') {
+                  // Example redaction - adjust based on actual sensitive fields
+                  // otherData.provider = { ...otherData.provider, apiKey: '***REDACTED***' };
+              }
 
               this.logger.debug(`(Depth ${depth}) Request Body Details:`, {
                   ...otherData,
@@ -745,7 +851,7 @@ export class OpenRouterClient {
 
           } catch (e) {
               this.logger.error(`(Depth ${depth}) Failed to summarize requestBody for detailed logging:`, e);
-              this.logger.debug(`(Depth ${depth}) Request Body (simple):`, { model: requestBody.model, messagesCount: requestBody.messages?.length, toolsCount: requestBody.tools?.length });
+              this.logger.debug(`(Depth ${depth}) Request Body (simple):`, { model: requestBody.model, models: requestBody.models, messagesCount: requestBody.messages?.length, toolsCount: requestBody.tools?.length });
           }
       }
 
@@ -761,8 +867,13 @@ export class OpenRouterClient {
       requestedFormat: ResponseFormat,
       strictJsonParsing: boolean
    ): any {
+      if (!requestedFormat?.type) {
+          this.logger.warn('_parseAndValidateJsonResponse called without a valid requestedFormat type. Returning raw content.');
+          return rawContent;
+      }
+
       const formatType = requestedFormat.type;
-      const schema = requestedFormat.type === 'json_schema' ? requestedFormat.json_schema?.schema : undefined;
+      const schema = formatType === 'json_schema' ? requestedFormat.json_schema?.schema : undefined;
       const entityName = `API response (format ${formatType})`;
       this.logger.debug(`Parsing and validating ${entityName}... Strict mode: ${strictJsonParsing}`);
 
@@ -770,9 +881,10 @@ export class OpenRouterClient {
           const parsedJson = jsonUtils.parseOrThrow(rawContent, entityName, { logger: this.logger });
 
           if (formatType === 'json_schema' && schema) {
-              this.logger.debug(`Validating response against JSON schema '${requestedFormat.json_schema?.name || '<no name>'}'...`);
+              const schemaName = requestedFormat.json_schema?.name || '<no name>';
+              this.logger.debug(`Validating response against JSON schema '${schemaName}'...`);
               jsonUtils.validateJsonSchema(parsedJson, schema, entityName, { logger: this.logger });
-              this.logger.debug(`Response passed JSON schema validation.`);
+              this.logger.debug(`Response passed JSON schema validation ('${schemaName}').`);
           } else if (formatType === 'json_object') {
                if (typeof parsedJson !== 'object' || parsedJson === null || Array.isArray(parsedJson)) {
                    throw new ValidationError(`${entityName} validation error: expected a JSON object, but got ${Array.isArray(parsedJson) ? 'array' : typeof parsedJson}`);
@@ -811,13 +923,14 @@ export class OpenRouterClient {
         } = params;
 
        const responseData = response.data;
-       this.logger.debug(`(Depth ${depth}) Handling API response. Status: ${response.status}, Model: ${responseData?.model}`);
+       const responseModel = responseData?.model || requestOptions.model;
+       this.logger.debug(`(Depth ${depth}) Handling API response. Status: ${response.status}, Model: ${responseModel}`);
 
        let currentCumulativeUsage = sumUsage(cumulativeUsage, responseData?.usage);
        if (responseData?.usage) this.logger.log(`(Depth ${depth}) Usage (this step):`, responseData.usage);
        this.logger.debug(`(Depth ${depth}) Cumulative Usage:`, currentCumulativeUsage);
 
-       this.logger.debug(`(Depth ${depth}) API response data summary:`, { id: responseData?.id, model: responseData?.model, choicesCount: responseData?.choices?.length, usage: responseData?.usage, error: responseData?.error });
+       this.logger.debug(`(Depth ${depth}) API response data summary:`, { id: responseData?.id, model: responseModel, choicesCount: responseData?.choices?.length, usage: responseData?.usage, error: responseData?.error });
 
        if (responseData?.error) {
            const apiErrorData = responseData.error as any;
@@ -844,7 +957,14 @@ export class OpenRouterClient {
              throw new APIError(`API response choice at depth ${depth} missing 'message' field`, response.status || 500, responseData);
        }
 
-       const assistantMessageWithTimestamp = { ...assistantMessageFromAPI, timestamp: formatDateTime() };
+       // Add timestamp and potentially other fields before adding to history
+       const assistantMessageWithTimestamp: Message = {
+           ...assistantMessageFromAPI,
+           timestamp: formatDateTime(),
+           // Ensure reasoning and annotations are included if present
+           reasoning: assistantMessageFromAPI.reasoning ?? null,
+           annotations: assistantMessageFromAPI.annotations ?? [],
+        };
        currentMessages.push(assistantMessageWithTimestamp);
        this.logger.debug(`(Depth ${depth}) Added assistant message (role: ${assistantMessageFromAPI.role}) to current conversation.`);
 
@@ -855,7 +975,7 @@ export class OpenRouterClient {
        if (finishReason === 'tool_calls' && assistantMessageFromAPI.tool_calls?.length) {
            if (!tools || tools.length === 0) {
                this.logger.error(`(Depth ${depth}) API requested tool calls, but no tools were provided in the request options.`);
-               throw new ToolError(`API requested tool calls for model ${responseData.model}, but no tools were configured for this request.`);
+               throw new ToolError(`API requested tool calls for model ${responseModel}, but no tools were configured for this request.`);
            }
 
            const numberOfCalls = assistantMessageFromAPI.tool_calls.length;
@@ -894,7 +1014,7 @@ export class OpenRouterClient {
            this.logger.log(`(Depth ${depth}) Sending tool results back to LLM...`);
            const nextRequestBody = this._buildRequestBody({
                ...requestOptions,
-               model: requestOptions.model,
+               model: responseModel, // Use the model that responded
                messages: currentMessages,
                tools: tools?.map(ToolHandler.formatToolForAPI) || null,
                toolChoice: 'auto',
@@ -938,26 +1058,36 @@ export class OpenRouterClient {
 
            this.logger.debug(`(Depth ${depth}) Final processed result content:`, finalResultContent);
 
-           const cost = this.costTracker?.calculateCost(responseData.model, currentCumulativeUsage) ?? null;
+           const cost = this.costTracker?.calculateCost(responseModel, currentCumulativeUsage) ?? null;
+
+           // Extract reasoning and annotations from the final message added to history
+           const finalAssistantMessage = currentMessages[currentMessages.length - 1];
+           const reasoning = finalAssistantMessage?.reasoning ?? null;
+           const annotations = finalAssistantMessage?.annotations ?? [];
+
 
            return {
                content: finalResultContent,
                usage: currentCumulativeUsage,
-               model: responseData.model,
+               model: responseModel,
                toolCallsCount: currentToolCallsCount,
                finishReason: finishReason,
                id: responseData.id,
-               cost: cost
+               cost: cost,
+               reasoning: reasoning,
+               annotations: annotations,
            };
        }
    }
 
 
+  // --- Error Handling ---
   private _handleError(error: OpenRouterError): void {
     const finalError = mapError(error);
     this.clientEventEmitter.emit('error', finalError);
   }
 
+  // --- History Key Generation ---
   private _getHistoryKey(user: string, group?: string | null): string {
     if (!user || typeof user !== 'string') {
        throw new ConfigError('User ID must be a non-empty string for history management.');
@@ -1014,7 +1144,7 @@ export class OpenRouterClient {
     }
      this.logger.log(`Requesting access token creation for user ${userInfo.userId} (validity: ${expiresIn ?? 'default'})...`);
     try {
-        // Cast userInfo to the extended type expected by SecurityManager
+        // SecurityManager expects the extended type, cast if necessary or ensure compatibility
         return this.securityManager.createAccessToken(userInfo as Omit<import('./security/types').ExtendedUserAuthInfo, 'expiresAt'>, expiresIn);
     } catch (error) {
          throw mapError(error);
@@ -1146,18 +1276,14 @@ export class OpenRouterClient {
      }
 
      let userInfo: UserAuthInfo | null = null;
-     let allowUnauthenticated = false;
-     let secConfig: BaseSecurityConfig | undefined; // Use base config type here
+     let secConfig: BaseSecurityConfig | undefined;
 
      if (this.securityManager) {
-         // Get the config, which might be the extended type, but we only need base fields
          const currentSecConfig = this.securityManager.getConfig();
-         secConfig = currentSecConfig; // Assign for use below
-         allowUnauthenticated = currentSecConfig.allowUnauthenticatedAccess ?? false;
+         secConfig = currentSecConfig as BaseSecurityConfig; // Cast for basic checks if needed
 
          if (params.accessToken) {
              try {
-                 // authenticateUser returns the extended type, but we assign to base type
                  userInfo = await this.securityManager.authenticateUser(params.accessToken);
                  if (!userInfo && secConfig?.requireAuthentication) {
                       throw new AuthenticationError("Authentication required but failed for handleToolCalls (Deprecated).", 401);
@@ -1167,7 +1293,7 @@ export class OpenRouterClient {
                  this.logger.error('[handleToolCalls Deprecated] Authentication error:', mappedError.message);
                  throw mappedError;
              }
-         } else if (secConfig?.requireAuthentication && !allowUnauthenticated) {
+         } else if (secConfig?.requireAuthentication && !(currentSecConfig as any).allowUnauthenticatedAccess) {
               throw new AuthorizationError("Authentication required but accessToken not provided for handleToolCalls (Deprecated).", 401);
          }
      }
@@ -1175,10 +1301,10 @@ export class OpenRouterClient {
      try {
         const toolResultsMessages = await ToolHandler.handleToolCalls({
            message: params.message as Message & { tool_calls: ToolCall[] },
-           debug: params.debug ?? this.debug,
+           debug: this.debug, // Use client debug state
            tools: params.tools ?? [],
            securityManager: this.securityManager || undefined,
-           userInfo: userInfo, // Pass base or extended type, should be compatible
+           userInfo: userInfo,
            logger: this.logger.withPrefix('ToolHandler(Deprecated)'),
            parallelCalls: true,
          });
@@ -1190,7 +1316,7 @@ export class OpenRouterClient {
      }
   }
 
-  // --- Plugin and Middleware ---
+  // --- Plugin and Middleware Management ---
 
   public async use(plugin: OpenRouterPlugin): Promise<void> {
     if (!plugin || typeof plugin.init !== 'function') {
@@ -1229,12 +1355,17 @@ export class OpenRouterClient {
     await dispatch(0);
   }
 
+  /** @internal */
   public setSecurityManager(securityManager: SecurityManager | null): void {
+    if (this.securityManager?.destroy) {
+        this.securityManager.destroy();
+    }
     this.securityManager = securityManager;
     this.logger.log(`SecurityManager instance ${securityManager ? 'replaced' : 'removed'} via plugin/method call.`);
     this.securityManager?.setDebugMode(this.debug);
   }
 
+  /** @internal */
   public setCostTracker(costTracker: CostTracker | null): void {
     this.costTracker?.destroy();
     this.costTracker = costTracker;
