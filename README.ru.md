@@ -25,6 +25,8 @@ pnpm add openrouter-kit
 
 Самый базовый пример для отправки запроса и получения ответа от модели.
 
+И не забываем про добрый прокси
+
 ```typescript
 // simple-chat.ts
 import { OpenRouterClient } from 'openrouter-kit';
@@ -60,6 +62,49 @@ async function main() {
 }
 
 main();
+```
+
+```javascript
+// .js.
+const { OpenRouterClient, MemoryHistoryStorage } = require("openrouter-kit");
+
+const client = new OpenRouterClient({
+  apiKey: "sk-or-v1-",
+  historyAdapter: new MemoryHistoryStorage(),
+  model: "google/gemini-2.0-flash-exp:free",
+//  proxy: proxyConfig, // For people from countries where models are prohibited (for example, Russia), a proxy is required.
+  debug: false
+});
+
+const systemPrompt = `You are a helpful assistant.`;
+
+async function dasd(nick, message) {
+  console.log(`[${nick}]: ${message}`);
+
+    const result = await client.chat({
+      systemPrompt: systemPrompt,
+      prompt: message,
+      user: nick,
+      temperature: 0.7
+    });
+    
+    console.log(`[bot]: ${result.content}`);
+    return result.content;
+}
+
+async function main() {
+    const result1 = await dasd("merka", "my name is merka");
+    const result2 = await dasd("merkava", "what is my name?");
+    const result3 = await dasd("merka", "what is my name?");
+    
+
+    console.log("result1:", result1);
+    console.log("result2:", result2);
+    console.log("result3:", result3);
+    
+}
+
+main(); 
 ```
 
 ### 2. Пример диалога (с управлением историей)
