@@ -25,8 +25,6 @@ pnpm add openrouter-kit
 
 Самый базовый пример для отправки запроса и получения ответа от модели.
 
-И не забываем про добрый прокси
-
 ```typescript
 // simple-chat.ts
 import { OpenRouterClient } from 'openrouter-kit';
@@ -38,73 +36,20 @@ const client = new OpenRouterClient({
 });
 
 async function main() {
-  try {
-    console.log('Отправка простого запроса...');
-    const result = await client.chat({
-      prompt: 'Напиши короткое приветствие для README.',
-      model: 'openai/gpt-4o-mini', // Переопределяем модель для этого вызова
-      temperature: 0.7,
-    });
+  console.log('Отправка простого запроса...');
+  const result = await client.chat({
+    prompt: 'Напиши короткое приветствие для README.',
+    model: 'openai/gpt-4o-mini', // Переопределяем модель для этого вызова
+    temperature: 0.7,
+  });
 
-    console.log('--- Результат ---');
-    console.log('Ответ модели:', result.content);
-    console.log('Использованная модель:', result.model);
-    console.log('Использовано токенов:', result.usage);
-
-  } catch (error: any) {
-    console.error(`\n--- Ошибка ---`);
-    console.error(`Сообщение: ${error.message}`);
-  } finally {
-    console.log('\nЗавершение работы...');
-    // Освобождаем ресурсы (таймеры и т.д.)
-    await client.destroy();
-  }
+  console.log('--- Результат ---');
+  console.log('Ответ модели:', result.content);
+  console.log('Использованная модель:', result.model);
+  console.log('Использовано токенов:', result.usage);
 }
 
 main();
-```
-
-```javascript
-// .js.
-const { OpenRouterClient, MemoryHistoryStorage } = require("openrouter-kit");
-
-const client = new OpenRouterClient({
-  apiKey: "sk-or-v1-",
-  historyAdapter: new MemoryHistoryStorage(),
-  model: "google/gemini-2.0-flash-exp:free",
-//  proxy: proxyConfig, // For people from countries where models are prohibited (for example, Russia), a proxy is required.
-  debug: false
-});
-
-const systemPrompt = `You are a helpful assistant.`;
-
-async function dasd(nick, message) {
-  console.log(`[${nick}]: ${message}`);
-
-    const result = await client.chat({
-      systemPrompt: systemPrompt,
-      prompt: message,
-      user: nick,
-      temperature: 0.7
-    });
-    
-    console.log(`[bot]: ${result.content}`);
-    return result.content;
-}
-
-async function main() {
-    const result1 = await dasd("merka", "my name is merka");
-    const result2 = await dasd("merkava", "what is my name?");
-    const result3 = await dasd("merka", "what is my name?");
-    
-
-    console.log("result1:", result1);
-    console.log("result2:", result2);
-    console.log("result3:", result3);
-    
-}
-
-main(); 
 ```
 
 ### 2. Пример диалога (с управлением историей)
@@ -185,7 +130,7 @@ const userTools = [
     function: {
       name: "getUserIdByNick",
       description: "Получает ID пользователя по его никнейму",
-      parameters: { /* ... схема аргументов ... */ },
+      parameters: { type: "object", properties: { nick: { type: "string" } }, required: ["nick"] },
     },
     execute: async (args) => {
       console.log(`[Tool Execute: getUserIdByNick] Args: ${JSON.stringify(args)}`);
@@ -198,7 +143,7 @@ const userTools = [
     function: {
       name: "getUserMessages",
       description: "Получает все сообщения пользователя по его ID",
-      parameters: { /* ... схема аргументов ... */ },
+      parameters: { type: "object", properties: { userId: { type: "string" } }, required: ["userId"] },
     },
     execute: async (args) => {
       console.log(`[Tool Execute: getUserMessages] Args: ${JSON.stringify(args)}`);
@@ -221,7 +166,7 @@ async function main() {
     const resultAlice = await client.chat({
       prompt: promptAlice,
       tools: userTools,
-      temperature: 0.5, 
+      temperature: 0.5,
     });
     console.log(`Ответ:\n${resultAlice.content}`);
     console.log(`(Вызовов инструментов: ${resultAlice.toolCallsCount})`);
@@ -240,6 +185,142 @@ async function main() {
     console.error("\n--- Ошибка ---");
     console.error(error);
   } finally {
+    await client.destroy();
+  }
+}
+
+main();
+```
+
+### 4. Запрос ответа в формате JSON (`json_object`)
+
+Этот пример показывает, как запросить у модели ответ в виде любого валидного JSON объекта.
+
+```typescript
+// json-object-example.ts
+import { OpenRouterClient } from 'openrouter-kit';
+
+const client = new OpenRouterClient({
+  apiKey: process.env.OPENROUTER_API_KEY || 'sk-or-v1-...',
+  model: 'openai/gpt-4o-mini', // Модель, хорошо работающая с JSON
+});
+
+async function main() {
+  try {
+    const prompt = "Предоставь информацию о пользователе John Doe: возраст 30, город New York, в формате JSON.";
+    console.log(`Запрос: "${prompt}" (ожидаем JSON объект)`);
+
+    const result = await client.chat({
+      prompt: prompt,
+      temperature: 0.2,
+      responseFormat: {
+        type: 'json_object', // <-- Запрашиваем JSON объект
+      },
+      // tools: [] // Убедитесь, что tools не передаются, если модель не поддерживает их вместе с responseFormat
+    });
+
+    console.log('--- Результат ---');
+    // result.content должен быть объектом JavaScript
+    console.log('Ответ модели (тип):', typeof result.content);
+    console.log('Ответ модели (содержимое):', result.content);
+    console.log('Использованная модель:', result.model);
+
+    // Пример доступа к полям
+    if (result.content && typeof result.content === 'object') {
+      console.log('Имя пользователя из ответа:', result.content.name || result.content.userName);
+    }
+
+  } catch (error: any) {
+    console.error(`\n--- Ошибка ---`);
+    console.error(`Сообщение: ${error.message}`);
+    if (error.code) console.error(`Код ошибки: ${error.code}`);
+    if (error.details) console.error(`Детали:`, error.details);
+  } finally {
+    console.log('\nЗавершение работы...');
+    await client.destroy();
+  }
+}
+
+main();
+```
+
+### 5. Запрос ответа по JSON Schema (`json_schema`)
+
+Этот пример показывает, как запросить ответ, строго соответствующий предоставленной JSON Schema.
+
+```typescript
+// json-schema-example.ts
+import { OpenRouterClient } from 'openrouter-kit';
+
+const client = new OpenRouterClient({
+  apiKey: process.env.OPENROUTER_API_KEY || 'sk-or-v1-...',
+  model: 'openai/gpt-4o-mini', // Модель, хорошо работающая со схемами
+  // strictJsonParsing: true, // Раскомментируйте, чтобы получать ошибку, если модель вернет невалидный JSON
+});
+
+// Определяем нашу JSON Schema
+const answerSchema = {
+  type: "object",
+  properties: {
+    summary: {
+      type: "string",
+      description: "Краткое изложение ответа на вопрос"
+    },
+    confidence: {
+      type: "number",
+      description: "Уверенность в ответе от 0.0 до 1.0",
+      minimum: 0,
+      maximum: 1
+    },
+    tags: {
+        type: "array",
+        description: "Список релевантных ключевых слов (тегов)",
+        items: {
+            type: "string"
+        }
+    }
+  },
+  required: ["summary", "confidence", "tags"] // Обязательные поля
+};
+
+async function main() {
+  try {
+    const prompt = "Объясни кратко, что такое квантовая запутанность, оцени свою уверенность и добавь теги.";
+    console.log(`Запрос: "${prompt}" (ожидаем JSON по схеме 'answer')`);
+
+    const result = await client.chat({
+      prompt: prompt,
+      temperature: 0.3,
+      responseFormat: {
+        type: 'json_schema', // <-- Запрашиваем JSON по схеме
+        json_schema: {
+          name: 'answer', // Имя для идентификации схемы (может использоваться моделью)
+          schema: answerSchema, // Передаем саму схему
+          strict: true // <-- Просим модель строго следовать схеме (если поддерживается)
+        }
+      },
+      // tools: [] // Убедитесь, что tools не передаются, если модель не поддерживает их вместе с responseFormat
+    });
+
+    console.log('--- Результат ---');
+    // result.content должен быть объектом JavaScript, соответствующим схеме
+    console.log('Ответ модели (тип):', typeof result.content);
+    console.log('Ответ модели (содержимое):', result.content);
+    console.log('Использованная модель:', result.model);
+
+    // Пример доступа к полям
+    if (result.content && typeof result.content === 'object') {
+      console.log('Изложение:', result.content.summary);
+      console.log('Теги:', result.content.tags?.join(', '));
+    }
+
+  } catch (error: any) {
+    console.error(`\n--- Ошибка ---`);
+    console.error(`Сообщение: ${error.message}`);
+    if (error.code) console.error(`Код ошибки: ${error.code}`);
+    if (error.details) console.error(`Детали:`, error.details);
+  } finally {
+    console.log('\nЗавершение работы...');
     await client.destroy();
   }
 }
@@ -622,13 +703,62 @@ chatWithTaxiBot();
 
 #### ⚙️ Формат ответа (`responseFormat` и Structured Outputs)
 
-Запросите ответ в формате JSON.
+Запросите ответ в формате JSON, чтобы упростить парсинг и обработку данных.
 
-*   **Конфигурация:** Опция `responseFormat` в `OpenRouterConfig` или `OpenRouterRequestOptions`.
+*   **Конфигурация:** Опция `responseFormat` в `OpenRouterConfig` (для установки по умолчанию) или `OpenRouterRequestOptions` (для конкретного запроса).
 *   **Типы:**
-    *   `{ type: 'json_object' }`: Любой валидный JSON.
-    *   `{ type: 'json_schema', json_schema: { name: string, schema: object, strict?: boolean, description?: string } }`: JSON, соответствующий вашей схеме. Флаг `strict` передается в API, если указан.
-*   **Обработка ошибок парсинга:** Зависит от `strictJsonParsing` (по умолчанию `false` - вернет `null`, `true` - выбросит `ValidationError`).
+    *   `{ type: 'json_object' }`: Модель должна вернуть любой валидный JSON объект.
+        ```typescript
+        // Пример использования в client.chat()
+        await client.chat({
+          prompt: "...",
+          responseFormat: { type: 'json_object' }
+        });
+        ```
+    *   `{ type: 'json_schema', json_schema: { name: string, schema: object, strict?: boolean, description?: string } }`: Модель должна вернуть JSON, соответствующий вашей JSON Schema.
+        *   `name`: Имя для вашей схемы (обязательно).
+        *   `schema`: Сам объект JSON Schema (обязательно).
+        *   `strict?`: (boolean) Требовать от модели строгого следования схеме (если модель поддерживает).
+        *   `description?`: (string) Описание схемы для модели.
+        ```typescript
+        // Пример определения схемы
+        const userProfileSchema = {
+          type: 'object',
+          properties: {
+            name: { type: 'string' },
+            age: { type: 'integer', minimum: 0 },
+            isStudent: { type: 'boolean' },
+            courses: {
+              type: 'array',
+              items: { type: 'string' }
+            }
+          },
+          required: ['name', 'age', 'courses']
+        };
+
+        // Пример использования в client.chat()
+        await client.chat({
+          prompt: "...",
+          responseFormat: {
+            type: 'json_schema',
+            json_schema: {
+              name: 'user_profile',
+              schema: userProfileSchema,
+              strict: true
+            }
+          }
+        });
+        ```
+
+*   **Обработка ошибок парсинга:** Если модель возвращает невалидный JSON (несмотря на запрос формата), поведение зависит от настройки `strictJsonParsing` (в `OpenRouterConfig` или `OpenRouterRequestOptions`):
+    *   `false` (по умолчанию): `result.content` будет `null`.
+    *   `true`: Будет выброшена ошибка `ValidationError` с кодом `ErrorCode.JSON_PARSE_ERROR` или `ErrorCode.JSON_SCHEMA_ERROR`.
+
+*   **⚠️ Предупреждение о совместимости с `tools`:** Не все модели поддерживают одновременное использование опции `responseFormat` (для принудительного JSON ответа) и опции `tools` (для вызова функций). Например, некоторые версии Google Gemini могут возвращать ошибку при такой комбинации.
+    *   **Решение:**
+        1.  Используйте **либо** `responseFormat`, **либо** `tools` для таких моделей.
+        2.  Если нужен и вызов функций, и JSON в итоге, создайте инструмент, который сам возвращает нужный JSON, и попросите модель вызвать этот инструмент.
+        3.  Используйте другую модель, которая поддерживает обе функции одновременно (например, модели OpenAI GPT-4/GPT-4o).
 
 #### ⚠️ Обработка ошибок
 
