@@ -1,7 +1,7 @@
+// Path: src/types/index.ts
 import type { AxiosRequestConfig } from 'axios';
-// Import ISecurityManager from its correct location
-import type { ISecurityManager } from '../security/types'; // Relative path
-import type { Logger } from '../utils/logger'; // Relative path
+import type { ISecurityManager } from '../security/types';
+import type { Logger } from '../utils/logger';
 
 // --- Plugin and Middleware Types ---
 
@@ -12,14 +12,14 @@ export interface OpenRouterPlugin {
 
 export interface MiddlewareContext {
   request: {
-    options: OpenRouterRequestOptions; // Use defined type below
+    options: OpenRouterRequestOptions;
   };
   response?: {
-    result?: ChatCompletionResult; // Use defined type below
-    rawResponse?: any; // Keep raw response if needed by middleware
-    error?: any; // Store potential errors
+    result?: ChatCompletionResult;
+    rawResponse?: any;
+    error?: any;
   };
-  metadata?: Record<string, any>; // For middleware communication
+  metadata?: Record<string, any>;
 }
 
 export type MiddlewareFunction = (
@@ -27,149 +27,148 @@ export type MiddlewareFunction = (
     next: () => Promise<void>
 ) => Promise<void>;
 
+// --- History Storage Related Types ---
+
+/** Metadata associated with the API call that produced a message or group of messages. */
+export interface ApiCallMetadata { // EXPORTED
+    callId: string;
+    modelUsed: string;
+    usage: UsageInfo | null;
+    cost: number | null;
+    timestamp: number;
+    finishReason: string | null;
+    requestMessagesCount?: number;
+}
+
+/** Represents a single entry in the history, linking a message to its originating API call. */
+export interface HistoryEntry { // EXPORTED
+    message: Message;
+    apiCallMetadata?: ApiCallMetadata | null;
+}
+
 // --- History Storage Adapter Interface ---
 
 export interface IHistoryStorage {
-  load(key: string): Promise<Message[]>; // Use defined type below
-  save(key: string, messages: Message[]): Promise<void>; // Use defined type below
+  load(key: string): Promise<HistoryEntry[]>; // Uses HistoryEntry
+  save(key: string, entries: HistoryEntry[]): Promise<void>; // Uses HistoryEntry
   delete(key: string): Promise<void>;
   listKeys(): Promise<string[]>;
-  destroy?: () => Promise<void> | void; // Optional cleanup method
+  destroy?: () => Promise<void> | void;
 }
 
 // --- Core Message and Tool Types ---
 
 export type Role = 'user' | 'assistant' | 'system' | 'tool';
 
-// Represents a single message in a conversation
 export interface Message {
   role: Role;
-  content: string | null; // API requires null if content is absent
-  timestamp?: string; // Optional: Added by the library for rendering/logging
-  name?: string; // Optional: Used for tool function names or participant names
-  tool_call_id?: string; // Optional: ID for tool response message
-  tool_calls?: ToolCall[]; // Optional: For assistant message requesting tool calls
-  reasoning?: string | null; // Optional: Reasoning steps from the model
-  annotations?: UrlCitationAnnotation[]; // Optional: Web search citations
+  content: string | null;
+  timestamp?: string;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: ToolCall[];
+  reasoning?: string | null;
+  annotations?: UrlCitationAnnotation[];
 }
 
-// Represents a tool call requested by the assistant
 export interface ToolCall {
-  id: string; // Unique ID for the tool call
-  type: 'function'; // Currently only 'function' is supported
+  id: string;
+  type: 'function';
   function: {
-    name: string; // Name of the function to call
-    arguments: string; // JSON string arguments for the function
+    name: string;
+    arguments: string;
   };
 }
 
 // --- Tool Definition ---
 
-// Context passed to the tool's execute function
 export interface ToolContext {
-  userInfo?: UserAuthInfo; // User info if authenticated
-  securityManager?: ISecurityManager; // Access to security checks
-  logger?: Logger; // Scoped logger instance
+  userInfo?: UserAuthInfo;
+  securityManager?: ISecurityManager;
+  logger?: Logger;
 }
 
-// Defines a tool that the model can use
 export interface Tool {
-  type: 'function'; // Currently only 'function' is supported
+  type: 'function';
   function: {
-    name: string; // Function name
-    description?: string; // Description for the model
-    parameters?: Record<string, any>; // JSON Schema for arguments
+    name: string;
+    description?: string;
+    parameters?: Record<string, any>;
   };
-  // The actual function implementation
   execute: (args: any, context?: ToolContext) => Promise<any> | any;
-  security?: ToolSecurity; // Optional security rules for this tool
-  name?: string; // Optional top-level name (alternative to function.name)
+  security?: ToolSecurity;
+  name?: string;
 }
 
 // --- Security Related Types (Base definitions) ---
 
-// Defines rate limiting parameters
 export interface RateLimit {
-  limit: number; // Max requests allowed
-  period: 'second' | 'minute' | 'hour' | 'day'; // Time window unit
-  // Note: 'interval' (string | number) is defined in the extended type in security/types
+  limit: number;
+  period: 'second' | 'minute' | 'hour' | 'day';
 }
 
-// Configuration for dangerous argument detection
 export interface DangerousArgumentsConfig {
-  globalPatterns?: Array<string | RegExp>; // Patterns applied to all tools
-  toolSpecificPatterns?: Record<string, Array<string | RegExp>>; // Patterns for specific tools
-  blockedValues?: string[]; // Specific string values to block
-  // Note: 'extendablePatterns', 'auditOnlyMode', 'specificKeyRules' are in extended type
+  globalPatterns?: Array<string | RegExp>;
+  toolSpecificPatterns?: Record<string, Array<string | RegExp>>;
+  blockedValues?: string[];
 }
 
-// Security rules specific to a tool definition
 export interface ToolSecurity {
-  requiredRole?: string | string[]; // Roles required to use the tool
-  requiredScopes?: string | string[]; // Scopes/permissions required
-  rateLimit?: RateLimit; // Specific rate limit for this tool (uses base RateLimit)
+  requiredRole?: string | string[];
+  requiredScopes?: string | string[];
+  rateLimit?: RateLimit;
 }
 
-// Configuration for user authentication methods
 export interface UserAuthConfig {
-  type?: 'jwt' | 'api-key' | 'custom'; // Authentication method
-  jwtSecret?: string; // Secret for JWT validation/signing
-  // Custom validation function
+  type?: 'jwt' | 'api-key' | 'custom';
+  jwtSecret?: string;
   customAuthenticator?: (token: string) => Promise<UserAuthInfo | null> | UserAuthInfo | null;
 }
 
-// Basic user information structure
 export interface UserAuthInfo {
-  userId: string; // Unique user identifier
-  role?: string; // Primary role
-  scopes?: string[]; // Permissions/scopes
-  expiresAt?: number; // Token expiration timestamp (ms)
-  apiKey?: string; // API key associated with the user (if applicable)
-  [key: string]: any; // Allow extension for custom fields (like in ExtendedUserAuthInfo)
+  userId: string;
+  role?: string;
+  scopes?: string[];
+  expiresAt?: number;
+  apiKey?: string;
+  [key: string]: any;
 }
 
-// Access control configuration for specific tools or globally
 export interface ToolAccessConfig {
-  allow?: boolean; // Explicitly allow/deny access
-  roles?: string | string[]; // Roles allowed access
-  scopes?: string | string[]; // Scopes required for access
-  rateLimit?: RateLimit; // Rate limit for this tool access rule (uses base RateLimit)
-  allowedApiKeys?: string[]; // Specific API keys allowed access
+  allow?: boolean;
+  roles?: string | string[];
+  scopes?: string | string[];
+  rateLimit?: RateLimit;
+  allowedApiKeys?: string[];
 }
 
-// Configuration for a specific role
 export interface RoleConfig {
-  allowedTools?: string | string[] | '*'; // Tools allowed for this role ('*' for all)
-  rateLimits?: Record<string, RateLimit>; // Rate limits per tool for this role (uses base RateLimit)
+  allowedTools?: string | string[] | '*';
+  rateLimits?: Record<string, RateLimit>;
 }
 
-// Container for role definitions
 export interface RolesConfig {
-  roles?: Record<string, RoleConfig>; // Map role names to their configurations
+  roles?: Record<string, RoleConfig>;
 }
 
-// Base Security configuration structure for the client
 export interface SecurityConfig {
-  defaultPolicy?: 'allow-all' | 'deny-all'; // Default access policy if no rule matches
-  userAuthentication?: UserAuthConfig; // Authentication settings
-  toolAccess?: Record<string, ToolAccessConfig>; // Tool-specific access rules
-  roles?: RolesConfig; // Role definitions
-  requireAuthentication?: boolean; // If true, requests without valid auth fail
-  // Note: Extended fields ('debug', 'allowUnauthenticatedAccess', 'dangerousArguments', 'toolConfig')
-  // are defined in the extended type in security/types
+  defaultPolicy?: 'allow-all' | 'deny-all';
+  userAuthentication?: UserAuthConfig;
+  toolAccess?: Record<string, ToolAccessConfig>;
+  roles?: RolesConfig;
+  requireAuthentication?: boolean;
 }
 
 // --- Event Types ---
 
-// Basic event structure for tool calls (can be extended)
 export interface ToolCallEvent {
   toolName: string;
-  userId: string; // Or 'anonymous'
+  userId: string;
   args: any;
   result: any;
   success: boolean;
   error?: Error;
-  timestamp: number; // Start time
+  timestamp: number;
 }
 
 // --- History Types (Legacy - For reference) ---
@@ -179,89 +178,83 @@ export type HistoryStorageType = 'memory' | 'disk';
 
 // --- API Interaction Types ---
 
-// Defines the desired format for the API response
 export interface ResponseFormat {
-  type: 'json_object' | 'json_schema'; // Type of format enforcement
+  type: 'json_object' | 'json_schema';
   json_schema?: {
-    name: string; // Name for the schema (required for type 'json_schema')
-    strict?: boolean; // Whether the model should strictly adhere (if supported)
-    schema: Record<string, any>; // The JSON Schema object
-    description?: string; // Optional description for the schema
+    name: string;
+    strict?: boolean;
+    schema: Record<string, any>;
+    description?: string;
   };
 }
 
-// Configuration for routing requests to specific providers
 export interface ProviderRoutingConfig {
-  order?: string[]; // List of provider names to try in order
-  allow_fallbacks?: boolean; // Allow backup providers if ordered ones fail (default: true)
-  require_parameters?: boolean; // Only use providers supporting all request parameters (default: false)
-  data_collection?: 'allow' | 'deny'; // Filter providers based on data policies (default: 'allow')
-  ignore?: string[]; // List of provider names to skip
-  quantizations?: string[]; // Filter providers by quantization level (e.g., ["int4", "fp8"])
-  sort?: 'price' | 'throughput' | 'latency'; // Explicitly sort providers
+  order?: string[];
+  allow_fallbacks?: boolean;
+  require_parameters?: boolean;
+  data_collection?: 'allow' | 'deny';
+  ignore?: string[];
+  quantizations?: string[];
+  sort?: 'price' | 'throughput' | 'latency';
 }
 
-// Configuration for web search plugin
 export interface PluginConfig {
-    id: string; // e.g., 'web'
-    max_results?: number; // For web search
-    search_prompt?: string; // For web search
-    [key: string]: any; // Allow other plugin-specific options
+    id: string;
+    max_results?: number;
+    search_prompt?: string;
+    [key: string]: any;
 }
 
-// Configuration for reasoning tokens
 export interface ReasoningConfig {
-    effort?: 'low' | 'medium' | 'high'; // OpenAI style effort level
-    max_tokens?: number; // Anthropic style token budget
-    exclude?: boolean; // Whether to exclude reasoning from the response
+    effort?: 'low' | 'medium' | 'high';
+    max_tokens?: number;
+    exclude?: boolean;
 }
 
-// Pricing information for a model
 export interface ModelPricingInfo {
-    id: string; // Model ID
-    name?: string; // Model display name
-    promptCostPerMillion: number; // Cost per million prompt tokens (USD)
-    completionCostPerMillion: number; // Cost per million completion tokens (USD)
-    context_length?: number; // Max context length
+    id: string;
+    name?: string;
+    promptCostPerMillion: number;
+    completionCostPerMillion: number;
+    context_length?: number;
 }
 
-// Structure for URL citation annotations from web search
 export interface UrlCitationAnnotation {
     type: 'url_citation';
     url_citation: {
       url: string;
       title: string;
-      content?: string; // Content snippet
-      start_index: number; // Start index in message content
-      end_index: number; // End index in message content
+      content?: string;
+      start_index: number;
+      end_index: number;
     };
 }
 
 // --- Main Client Configuration and Request Options ---
 
-// Configuration object for initializing the OpenRouterClient
 export interface OpenRouterConfig {
   // Core
-  apiKey: string; // Required: Your OpenRouter API key
-  apiEndpoint?: string; // Optional: Override API endpoint URL
-  model?: string; // Optional: Default model ID
-  debug?: boolean; // Optional: Enable debug logging (default: false)
+  apiKey: string;
+  apiEndpoint?: string;
+  apiBaseUrl?: string; // Ensure this exists
+  model?: string;
+  debug?: boolean;
 
   // Network & Headers
-  proxy?: string | { // Optional: Proxy configuration
+  proxy?: string | {
     host: string;
     port: number | string;
     user?: string;
     pass?: string;
-  };
-  referer?: string; // Optional: HTTP-Referer header value
-  title?: string; // Optional: X-Title header value
-  axiosConfig?: AxiosRequestConfig; // Optional: Custom Axios config
+  } | null;
+  referer?: string;
+  title?: string;
+  axiosConfig?: AxiosRequestConfig;
 
   // History Management
-  historyAdapter?: IHistoryStorage; // Recommended: Custom history storage implementation
-  historyTtl?: number; // Optional: Cache TTL for history entries (ms)
-  historyCleanupInterval?: number; // Optional: Interval for cache cleanup (ms)
+  historyAdapter?: IHistoryStorage; // Uses updated IHistoryStorage
+  historyTtl?: number;
+  historyCleanupInterval?: number;
   /** @deprecated Use historyAdapter */
   historyStorage?: HistoryStorageType;
   /** @deprecated Configure path in DiskHistoryStorage adapter */
@@ -272,115 +265,105 @@ export interface OpenRouterConfig {
   historyAutoSave?: boolean;
 
   // Model Behavior & Routing
-  defaultProviderRouting?: ProviderRoutingConfig; // Optional: Default provider routing rules
-  modelFallbacks?: string[]; // Optional: Default fallback model IDs
-  responseFormat?: ResponseFormat | null; // Optional: Default response format
-  maxToolCalls?: number; // Optional: Default max recursive tool calls (default: 10)
-  strictJsonParsing?: boolean; // Optional: Throw error if JSON response fails parsing/validation (default: false)
+  defaultProviderRouting?: ProviderRoutingConfig;
+  modelFallbacks?: string[];
+  responseFormat?: ResponseFormat | null;
+  maxToolCalls?: number;
+  strictJsonParsing?: boolean;
 
   // Security
-  security?: SecurityConfig; // Optional: Security configuration (uses base type)
+  security?: SecurityConfig;
 
   // Cost Tracking
-  enableCostTracking?: boolean; // Optional: Enable cost calculation (default: false)
-  priceRefreshIntervalMs?: number; // Optional: How often to refresh prices (ms, default: 6 hours)
-  initialModelPrices?: Record<string, ModelPricingInfo>; // Optional: Pre-populate prices
+  enableCostTracking?: boolean;
+  priceRefreshIntervalMs?: number;
+  initialModelPrices?: Record<string, ModelPricingInfo>;
 
   // Deprecated/Unused?
-  enableReasoning?: boolean; // Not standard OpenRouter param
-  webSearch?: boolean; // Not standard OpenRouter param, use :online suffix or plugins
+  enableReasoning?: boolean;
+  webSearch?: boolean;
 }
 
-// Options for a single chat request using client.chat()
 export interface OpenRouterRequestOptions {
-  // Input Content (prompt or customMessages is required)
-  prompt?: string; // Simple user prompt
-  customMessages?: Message[] | null; // Full message history override
+  // Input Content
+  prompt?: string;
+  customMessages?: Message[] | null;
 
   // Context & History
-  user?: string; // User ID for history tracking
-  group?: string | null; // Group ID for history tracking
-  systemPrompt?: string | null; // System message content
-  accessToken?: string | null; // Access token for security checks
+  user?: string;
+  group?: string | null;
+  systemPrompt?: string | null;
+  accessToken?: string | null;
 
   // Model & Generation Parameters
-  model?: string; // Override default model
-  temperature?: number; // Sampling temperature (0.0-2.0)
-  maxTokens?: number | null; // Max completion tokens
-  topP?: number | null; // Nucleus sampling (0.0-1.0)
-  presencePenalty?: number | null; // Penalty for new tokens (-2.0-2.0)
-  frequencyPenalty?: number | null; // Penalty based on frequency (-2.0-2.0)
-  stop?: string | string[] | null; // Stop sequences
-  seed?: number | null; // Seed for deterministic sampling (if supported)
-  logitBias?: Record<string, number> | null; // Adjust token probabilities
+  model?: string;
+  temperature?: number;
+  maxTokens?: number | null;
+  topP?: number | null;
+  presencePenalty?: number | null;
+  frequencyPenalty?: number | null;
+  stop?: string | string[] | null;
+  seed?: number | null;
+  logitBias?: Record<string, number> | null;
 
   // Tool / Function Calling
-  tools?: Tool[] | null; // Available tools
-  toolChoice?: "none" | "auto" | { type: "function", function: { name: string } } | null; // Control tool usage
-  parallelToolCalls?: boolean; // Allow model to request multiple tools concurrently (default: true if tools provided)
-  maxToolCalls?: number; // Override default max recursive tool calls
+  tools?: Tool[] | null;
+  toolChoice?: "none" | "auto" | { type: "function", function: { name: string } } | null;
+  parallelToolCalls?: boolean;
+  maxToolCalls?: number;
 
   // Response Formatting
-  responseFormat?: ResponseFormat | null; // Request specific response format
-  strictJsonParsing?: boolean; // Override default strict JSON parsing
+  responseFormat?: ResponseFormat | null;
+  strictJsonParsing?: boolean;
 
-  // Routing and Transforms (OpenRouter Specific)
-  route?: string; // Deprecated? Use provider routing
-  transforms?: string[]; // e.g., ["middle-out"]
-  provider?: ProviderRoutingConfig; // Request-specific provider routing rules
-  models?: string[]; // Request-specific model list (primary + fallbacks)
-  plugins?: PluginConfig[]; // Request-specific plugins (e.g., web search)
-  reasoning?: ReasoningConfig; // Request-specific reasoning control
+  // Routing and Transforms
+  route?: string;
+  transforms?: string[];
+  provider?: ProviderRoutingConfig;
+  models?: string[];
+  plugins?: PluginConfig[];
+  reasoning?: ReasoningConfig;
 }
 
 // --- API Response Structures ---
 
-// Usage information returned by the API
 export interface UsageInfo {
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
-    [key: string]: any; // Allow for provider-specific usage fields
+    [key: string]: any;
 }
 
-// Structure of the main response object from the /chat/completions endpoint
 export interface OpenRouterResponse {
-  id: string; // Unique generation ID
-  object: string; // Typically "chat.completion" or "chat.completion.chunk"
-  created: number; // Unix timestamp
-  model: string; // Model ID that generated the response
+  id: string;
+  object: string;
+  created: number;
+  model: string;
   choices: Array<{
     index: number;
-    message: Message; // The generated message (contains content, role, tool_calls etc.)
-    // Normalized finish reason: 'stop', 'length', 'tool_calls', 'content_filter', or null
+    message: Message;
     finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
-    logprobs?: any | null; // Optional log probabilities
+    logprobs?: any | null;
   }>;
-  usage?: UsageInfo; // Optional: Token usage information
-  system_fingerprint?: string; // Optional: System fingerprint
-  // Optional: Error details if an error occurred during generation
+  usage?: UsageInfo;
+  system_fingerprint?: string;
   error?: { message?: string; type?: string; code?: string; [key: string]: any } | string;
 }
 
-// Final result object returned by client.chat()
 export interface ChatCompletionResult {
-  content: any; // Parsed final content (string, object, etc.)
-  usage: UsageInfo | null; // Total usage for the request chain
-  model: string; // Final model used
-  toolCallsCount: number; // Total number of tool calls made
-  finishReason: string | null; // Final finish reason
-  durationMs: number; // Total duration of the chat request
-  id?: string; // ID of the final generation step
-  cost?: number | null; // Calculated cost (if enabled)
-  reasoning?: string | null; // Reasoning steps from the final response
-  annotations?: UrlCitationAnnotation[]; // Web search citations from the final response
+  content: any;
+  usage: UsageInfo | null;
+  model: string;
+  toolCallsCount: number;
+  finishReason: string | null;
+  durationMs: number;
+  id?: string;
+  cost?: number | null;
+  reasoning?: string | null;
+  annotations?: UrlCitationAnnotation[];
 }
 
-// Structure for credit balance information from /auth/key
 export interface CreditBalance {
-    limit: number; // Total credits purchased or limit
-    usage: number; // Credits used
+    limit: number;
+    usage: number;
 }
-
-// Export an empty object to satisfy TypeScript's module requirements if needed
-export {};

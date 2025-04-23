@@ -1,18 +1,17 @@
-import type { IHistoryStorage, Message } from '../types';
+// Path: src/history/memory-storage.ts
+import type { IHistoryStorage, HistoryEntry } from '../types'; // Import HistoryEntry
 
 export class MemoryHistoryStorage implements IHistoryStorage {
-  // Use a standard Map for storage
-  private storage = new Map<string, Message[]>();
+  // Store HistoryEntry arrays
+  private storage = new Map<string, HistoryEntry[]>();
 
-  async load(key: string): Promise<Message[]> {
-    const messages = this.storage.get(key);
-    // Return a *copy* of the messages array to prevent mutation
-    return messages ? [...messages] : [];
+  async load(key: string): Promise<HistoryEntry[]> {
+    const entries = this.storage.get(key);
+    return entries ? [...entries] : []; // Return a copy
   }
 
-  async save(key: string, messages: Message[]): Promise<void> {
-    // Store a *copy* of the messages array
-    this.storage.set(key, [...messages]);
+  async save(key: string, entries: HistoryEntry[]): Promise<void> {
+    this.storage.set(key, [...entries]); // Store a copy
   }
 
   async delete(key: string): Promise<void> {
@@ -20,14 +19,10 @@ export class MemoryHistoryStorage implements IHistoryStorage {
   }
 
   async listKeys(): Promise<string[]> {
-    // Return an array of keys from the Map
     return Array.from(this.storage.keys());
   }
 
-  // Optional: Add a destroy method if needed (e.g., clear interval timers if any)
-  // For simple memory storage, clear might be enough.
   async destroy(): Promise<void> {
       this.storage.clear();
-      // console.log("[MemoryHistoryStorage] Destroyed (cleared storage).");
   }
 }
