@@ -1,6 +1,6 @@
 // Path: src/tool-handler.ts
-import { Message, Tool, ToolCall, UserAuthInfo, ToolContext } from './types';
-import { ExtendedToolCallEvent, SecurityContext } from './security/types';
+import { Message, Tool, ToolCall, UserAuthInfo, ToolContext, ToolCallOutcome, ToolCallDetail, ToolCallStatus } from './types';
+import { ExtendedToolCallEvent } from './security/types';
 import {
     mapError,
     OpenRouterError,
@@ -18,26 +18,13 @@ import type { SecurityManager } from './security/security-manager';
 import { Logger } from './utils/logger';
 
 interface StructuredToolError {
-    errorType: string; // // Error code (from ErrorCode)
+    errorType: string; // Error code (from ErrorCode)
     errorMessage: string; // Error message
     details?: any; // Optional details (e.g., validation errors)
 }
-// ---
 
-interface InternalToolHandlerParams {
-  message: Message & { tool_calls: ToolCall[] };
-  debug: boolean;
-  tools: Tool[];
-  securityManager?: SecurityManager;
-  userInfo: UserAuthInfo | null;
-  logger: Logger;
-  parallelCalls?: boolean;
-}
+// --- Internal Helper Functions ---
 
-/**
- * Formats a tool error in a structured JSON (string) for LLM.
- * @internal
- */
 function formatToolErrorForLLM(error: OpenRouterError | Error, toolName: string, logger: Logger): string {
     const mappedError = mapError(error);
 
@@ -55,11 +42,9 @@ function formatToolErrorForLLM(error: OpenRouterError | Error, toolName: string,
          mappedError.code === ErrorCode.DANGEROUS_ARGS) &&
         mappedError.details
     ) {
-         // For validation/parsing/argument errors, details may be useful
          structuredError.details = mappedError.details;
          logger.debug(`Including details in structured error for ${mappedError.code}:`, mappedError.details);
     } else if (mappedError.code === ErrorCode.TOOL_ERROR && mappedError.details) {
-         // For tool execution errors, if details are present
          structuredError.details = mappedError.details;
          logger.debug(`Including details in structured error for ${mappedError.code}:`, mappedError.details);
     }
@@ -76,37 +61,52 @@ function formatToolErrorForLLM(error: OpenRouterError | Error, toolName: string,
     );
 }
 
+function createErrorDetail(error: OpenRouterError | Error): ToolCallDetail['error'] {
+    const mappedError = mapError(error);
+    return {
+        type: mappedError.code || ErrorCode.UNKNOWN_ERROR,
+        message: mappedError.message,
+        details: mappedError.details,
+    };
+}
 
 async function _processSingleToolCall(
     toolCall: ToolCall,
     availableTools: Tool[],
     securityManager: SecurityManager | undefined,
     userInfo: UserAuthInfo | null,
-    logger: Logger
-): Promise<Message> {
+    logger: Logger,
+    includeToolResultInReport: boolean // New parameter
+): Promise<ToolCallOutcome> { // Return ToolCallOutcome
     const toolCallStartTime = Date.now();
-    let toolResultContent: string; // Now will contain JSON string result or error
+    let toolResultContent: string;
+    let toolRawResult: any = null;
     let executionSuccess = false;
     let executionError: OpenRouterError | Error | undefined;
     let parsedArgs: any = null;
-    const toolLogDetails: Record<string, any> = { tool_call_id: toolCall.id };
-
     const toolName = toolCall.function?.name;
-    toolLogDetails.name = toolName;
+
+    // Initialize details structure
+    const details: Partial<ToolCallDetail> = {
+        toolCallId: toolCall.id,
+        toolName: toolName || 'unknown_tool', // Fallback name
+        requestArgsString: toolCall.function?.arguments || '',
+        status: 'error_unknown', // Default status
+        error: null,
+        result: null,
+    };
 
     if (!toolName) {
         logger.error(`Tool call failed: Missing function name. Tool Call ID: ${toolCall.id}`, toolCall);
-        // Format error in JSON
-        toolResultContent = formatToolErrorForLLM(
-            new ToolError(`Tool call (ID: ${toolCall.id}) is missing the function name.`),
-            'unknown_tool',
-            logger
-        );
+        const missingNameError = new ToolError(`Tool call (ID: ${toolCall.id}) is missing the function name.`);
+        details.status = 'error_unknown'; // Or a more specific error
+        details.error = createErrorDetail(missingNameError);
+        // FIX 1: Provide fallback 'unknown_tool' if details.toolName is undefined/null
+        toolResultContent = formatToolErrorForLLM(missingNameError, details.toolName || 'unknown_tool', logger);
+
         return {
-            role: 'tool',
-            tool_call_id: toolCall.id,
-            content: toolResultContent,
-            name: 'error_handler' // Error name
+            message: { role: 'tool', tool_call_id: toolCall.id, content: toolResultContent, name: 'error_handler' },
+            details: { ...details, resultString: toolResultContent } as ToolCallDetail
         };
     }
 
@@ -117,79 +117,101 @@ async function _processSingleToolCall(
         if (!funcCall) throw new ToolError(`Tool call (ID: ${toolCallId}) is missing the 'function' object.`);
 
         const argsString = funcCall.arguments;
-        toolLogDetails.rawArgs = argsString;
+        details.requestArgsString = argsString; // Already set, but for clarity
 
         const toolDefinition = availableTools.find(t => t.type === 'function' && (t.function.name === toolName || t.name === toolName));
         if (!toolDefinition) {
-            throw new ToolError(`Tool '${toolName}' is not defined or not available in the provided 'tools' list.`);
+             details.status = 'error_not_found';
+             throw new ToolError(`Tool '${toolName}' is not defined or not available in the provided 'tools' list.`);
         }
         const executeFunction = toolDefinition.execute;
         if (!executeFunction || typeof executeFunction !== 'function') {
+             details.status = 'error_not_found'; // Or internal error
              throw new ToolError(`Implementation ('execute' function) not found or not a function for tool '${toolName}'.`);
         }
-        toolLogDetails.definitionFound = true;
 
+        // --- Argument Parsing and Validation ---
         try {
             logger.debug(`Parsing arguments for '${toolName}'... Raw: ${argsString}`);
             parsedArgs = jsonUtils.parseOrThrow(argsString, `tool '${toolName}' arguments`, { logger });
-            toolLogDetails.parsedArgs = parsedArgs;
+            details.parsedArgs = parsedArgs;
 
             const schema = toolDefinition.function?.parameters;
             if (schema && typeof schema === 'object' && Object.keys(schema).length > 0) {
                  logger.debug(`Validating arguments for '${toolName}' against schema...`);
                  jsonUtils.validateJsonSchema(parsedArgs, schema, `tool '${toolName}' arguments`, { logger });
-                 toolLogDetails.argsSchemaValid = true;
                  logger.debug(`Arguments for '${toolName}' passed schema validation.`);
             } else {
                 logger.debug(`Schema for '${toolName}' not provided or empty, validation skipped.`);
-                toolLogDetails.argsSchemaValid = null;
             }
         } catch (validationOrParsingError) {
             logger.warn(`Error parsing/validating arguments for '${toolName}': ${(validationOrParsingError as Error).message}`);
-            toolLogDetails.argsSchemaValid = false;
-            toolLogDetails.validationError = (validationOrParsingError as Error).message;
-            throw validationOrParsingError; // Pass error above for formatting
+            // Determine specific status based on error type
+            const mappedValError = mapError(validationOrParsingError);
+            if (mappedValError.code === ErrorCode.JSON_PARSE_ERROR) {
+                details.status = 'error_parsing';
+            } else if (mappedValError.code === ErrorCode.JSON_SCHEMA_ERROR || mappedValError.code === ErrorCode.VALIDATION_ERROR) {
+                details.status = 'error_validation';
+            } else {
+                details.status = 'error_parsing'; // Fallback
+            }
+            details.error = createErrorDetail(mappedValError);
+            details.parsedArgs = null; // Ensure parsedArgs is null on error
+            throw validationOrParsingError; // Re-throw to be caught by outer handler
         }
 
+        // --- Security Checks ---
         if (securityManager) {
             logger.debug(`Performing security checks via SecurityManager for '${toolName}', User: ${userInfo?.userId || 'anonymous'}`);
             try {
                 await securityManager.checkToolAccessAndArgs(toolDefinition, userInfo, parsedArgs);
-                toolLogDetails.securityChecksPassed = true;
                 logger.log(`Security checks passed for '${toolName}' (User: ${userInfo?.userId || 'anonymous'}).`);
             } catch (securityError) {
                  const mappedSecError = mapError(securityError);
                  logger.warn(`Security check FAILED for '${toolName}': ${mappedSecError.message} (Code: ${mappedSecError.code})`);
-                 toolLogDetails.securityChecksPassed = false;
-                 toolLogDetails.securityError = mappedSecError.message;
-                 toolLogDetails.securityErrorCode = mappedSecError.code;
-                 throw securityError; // Pass error above for formatting
+                 details.status = 'error_security';
+                 details.error = createErrorDetail(mappedSecError);
+                 throw securityError; // Re-throw
             }
         } else {
             logger.debug(`SecurityManager not configured, security checks for '${toolName}' skipped.`);
-            toolLogDetails.securityChecksPassed = null;
         }
 
-        const toolContext: ToolContext = { userInfo: userInfo || undefined, securityManager: securityManager || undefined, logger: logger.withPrefix(`Tool:${toolName}`) };
+        // --- Execute Tool Function ---
+        const toolContext: ToolContext = {
+            userInfo: userInfo || undefined,
+            securityManager: securityManager || undefined,
+            logger: logger.withPrefix(`Tool:${toolName}`),
+            includeToolResultInReport // Pass option to context
+        };
         logger.debug(`Executing function for tool '${toolName}'...`);
-        let toolRawResult: any;
+
         try {
             toolRawResult = await executeFunction(parsedArgs, toolContext);
             executionSuccess = true;
-            toolLogDetails.executionSuccess = true;
+            details.status = 'success';
+            if (includeToolResultInReport) { // Conditionally store full result
+                details.result = toolRawResult;
+            } else {
+                details.result = null; // Explicitly null if not included
+            }
+            details.error = null;
             logger.debug(`Execution of '${toolName}' completed successfully.`);
         } catch (execError) {
             executionSuccess = false;
             executionError = mapError(execError); // Execution error
-            toolLogDetails.executionSuccess = false;
-            toolLogDetails.executionError = executionError.message;
-             const errorDetails = executionError instanceof OpenRouterError ? executionError.details : undefined;
-            logger.error(`Error executing function for tool '${toolName}': ${executionError.message}`, errorDetails || executionError);
-            // Error will be formatted below
+            details.status = 'error_execution';
+            details.error = createErrorDetail(executionError);
+            details.result = null;
+            // FIX 2: Check if details.error exists before accessing details.error.details
+            const errorLogDetails = details.error ? details.error.details : undefined;
+            logger.error(`Error executing function for tool '${toolName}': ${executionError.message}`, errorLogDetails || executionError);
+            // Error will be formatted for LLM below
         } finally {
             const duration = Date.now() - toolCallStartTime;
-            toolLogDetails.durationMs = duration;
-            logger.log(`Tool call '${toolName}' (ID: ${toolCall.id}) finished. Success: ${executionSuccess}. Duration: ${duration}ms.`);
+            details.durationMs = duration;
+            logger.log(`Tool call '${toolName}' (ID: ${toolCall.id}) finished. Status: ${details.status}. Duration: ${duration}ms.`);
+            // Log tool call via SecurityManager if available
             if (securityManager) {
                 const event: ExtendedToolCallEvent = {
                     toolName,
@@ -201,52 +223,67 @@ async function _processSingleToolCall(
                     timestamp: toolCallStartTime,
                     duration: duration,
                 };
-                try {
-                    securityManager.logToolCall(event);
-                } catch (logError) {
-                     logger.error(`Error logging tool call via SecurityManager for ${toolName}:`, logError);
-                }
+                try { securityManager.logToolCall(event); } catch (logError) { logger.error(`Error logging tool call via SecurityManager for ${toolName}:`, logError); }
             }
         }
 
         // --- Format Result for LLM ---
         if (executionSuccess) {
-            // Successful result serializes to JSON
             toolResultContent = jsonUtils.stringifyOrThrow(toolRawResult ?? null, `tool '${toolName}' result`, { logger });
         } else {
-            // Execution error is formatted via helper
-            toolResultContent = formatToolErrorForLLM(executionError!, toolName, logger); // Используем ! т.к. executionError точно определен здесь
+            toolResultContent = formatToolErrorForLLM(executionError!, toolName, logger); // executionError is defined here if !executionSuccess
         }
         logger.debug(`Final content for LLM (Tool Call ID: ${toolCall.id}): ${toolResultContent.substring(0, 200)}...`);
 
     } catch (error) {
-        // --- Catch errors from definition finding, parsing, validation, or security checks ---
+        // --- Catch errors from definition finding, parsing, validation, security checks ---
         const mappedError = mapError(error);
         executionError = mappedError; // Save for possible logging
         executionSuccess = false;
-        const currentToolName = toolLogDetails.name || '<unknown tool>';
+        const currentToolName = details.toolName || '<unknown tool>'; // Use fallback name
         const errorMessage = executionError.message || `Unknown error processing call for ${currentToolName}`;
-         const errorDetails = executionError instanceof OpenRouterError ? executionError.details : undefined;
-        logger.error(`Error processing tool call '${currentToolName}' (ID: ${toolCall.id}) before execution: ${errorMessage}`, errorDetails || executionError);
+        logger.error(`Error processing tool call '${currentToolName}' (ID: ${toolCall.id}) before execution: ${errorMessage}`, mappedError.details || executionError);
 
-        // Format error that occurred *before* execution via helper
+        // Update details if not already set by specific error handlers above
+        if (details.status === 'error_unknown') {
+             details.error = createErrorDetail(mappedError);
+             // Try to guess status if possible, otherwise keep unknown
+             if (mappedError.code === ErrorCode.TOOL_ERROR && errorMessage.includes("not defined")) details.status = 'error_not_found';
+             else if (mappedError.code === ErrorCode.VALIDATION_ERROR) details.status = 'error_validation';
+             else if (mappedError.code === ErrorCode.JSON_PARSE_ERROR) details.status = 'error_parsing';
+             else if (mappedError.code === ErrorCode.SECURITY_ERROR || mappedError.code === ErrorCode.ACCESS_DENIED_ERROR || mappedError.code === ErrorCode.RATE_LIMIT_ERROR) details.status = 'error_security';
+        }
+
         toolResultContent = formatToolErrorForLLM(mappedError, currentToolName, logger);
-
-        toolLogDetails.criticalError = errorMessage;
-        toolLogDetails.criticalErrorCode = executionError instanceof OpenRouterError ? executionError.code : undefined;
-        toolLogDetails.criticalErrorDetails = errorDetails;
     }
 
-    // --- Construct and Return the 'tool' Message ---
+    // --- Construct and Return the Outcome ---
+    details.resultString = toolResultContent; // Store the final string sent to LLM
+
     return {
-        role: 'tool',
-        tool_call_id: toolCall.id,
-        content: toolResultContent, // JSON string result or JSON string error
-        name: toolName || 'error_handler', // Tool name or error handler name
+        message: {
+            role: 'tool',
+            tool_call_id: toolCall.id,
+            content: toolResultContent,
+            name: toolName || 'error_handler', // Use original toolName or error_handler
+        },
+        details: details as ToolCallDetail // Cast Partial to full type
     };
 };
 
-async function _internalHandleToolCalls(params: InternalToolHandlerParams): Promise<Message[]> {
+interface InternalToolHandlerParams {
+  message: Message & { tool_calls: ToolCall[] };
+  debug: boolean;
+  tools: Tool[];
+  securityManager?: SecurityManager;
+  userInfo: UserAuthInfo | null;
+  logger: Logger;
+  parallelCalls?: boolean;
+  includeToolResultInReport?: boolean; // New option
+}
+
+// Now returns ToolCallOutcome[]
+async function _internalHandleToolCalls(params: InternalToolHandlerParams): Promise<ToolCallOutcome[]> {
   const {
     message,
     tools = [],
@@ -254,6 +291,7 @@ async function _internalHandleToolCalls(params: InternalToolHandlerParams): Prom
     userInfo,
     logger,
     parallelCalls = true,
+    includeToolResultInReport = false, // Default to false
   } = params;
 
   if (!message?.tool_calls?.length) {
@@ -268,46 +306,58 @@ async function _internalHandleToolCalls(params: InternalToolHandlerParams): Prom
   const toolCalls = message.tool_calls;
   const availableTools = tools;
 
-  logger.log(`Processing ${toolCalls.length} tool call(s) requested by the model (Mode: ${parallelCalls ? 'Parallel' : 'Sequential'}).`);
+  logger.log(`Processing ${toolCalls.length} tool call(s) requested by the model (Mode: ${parallelCalls ? 'Parallel' : 'Sequential'}, IncludeResult: ${includeToolResultInReport}).`);
 
-  let toolResultsMessages: Message[];
+  let toolOutcomes: ToolCallOutcome[];
 
   try {
       const processCallFn = (toolCall: ToolCall) =>
-          _processSingleToolCall(toolCall, availableTools, securityManager, userInfo, logger);
+          _processSingleToolCall(
+              toolCall,
+              availableTools,
+              securityManager,
+              userInfo,
+              logger,
+              includeToolResultInReport // Pass option down
+          );
 
       if (parallelCalls) {
           logger.debug("Executing tool calls in parallel...");
-          toolResultsMessages = await Promise.all(toolCalls.map(processCallFn));
+          toolOutcomes = await Promise.all(toolCalls.map(processCallFn));
       } else {
           logger.debug("Executing tool calls sequentially...");
-          toolResultsMessages = [];
+          toolOutcomes = [];
           for (const toolCall of toolCalls) {
-              const resultMessage = await processCallFn(toolCall);
-              toolResultsMessages.push(resultMessage);
+              const outcome = await processCallFn(toolCall);
+              toolOutcomes.push(outcome);
           }
       }
   } catch (error) {
       const mappedError = mapError(error);
       logger.error(`Unexpected error during batch tool call processing: ${mappedError.message}`, mappedError.details);
+      // We might lose individual details here if Promise.all fails early
+      // Consider returning partial results or a specific batch error
       throw mappedError;
   }
 
-  logger.log(`Finished processing ${toolCalls.length} tool call(s). Returning ${toolResultsMessages.length} result messages.`);
+  logger.log(`Finished processing ${toolCalls.length} tool call(s). Returning ${toolOutcomes.length} outcomes.`);
 
-  return toolResultsMessages;
+  return toolOutcomes;
 }
 
 export class ToolHandler {
-  static async handleToolCalls(params: InternalToolHandlerParams): Promise<Message[]> {
+  // Update signature to accept the new option and return ToolCallOutcome[]
+  static async handleToolCalls(params: InternalToolHandlerParams): Promise<ToolCallOutcome[]> {
     return _internalHandleToolCalls(params);
   }
 
+  // formatToolForAPI remains unchanged
   static formatToolForAPI(toolInput: Record<string, any> | Tool): Tool {
     if (!toolInput || typeof toolInput !== 'object') {
         throw new ValidationError('Invalid tool definition: Expected an object.');
     }
 
+    // Handle standard format { type: "function", function: { ... } }
     if (toolInput.type === 'function' && typeof toolInput.function === 'object' && toolInput.function !== null) {
         const func = toolInput.function;
         if (typeof func.name !== 'string' || !func.name) {
@@ -326,22 +376,31 @@ export class ToolHandler {
             ...(func.parameters && typeof func.parameters === 'object' && Object.keys(func.parameters).length > 0 && { parameters: func.parameters }),
         };
 
-        return {
+        // Include execute and security if they exist on the input object
+        const formattedTool: Tool = {
             type: 'function',
             function: apiFormattedFunction,
              ...(toolInput.execute && typeof toolInput.execute === 'function' && { execute: toolInput.execute }),
              ...(toolInput.security && typeof toolInput.security === 'object' && toolInput.security !== null && { security: toolInput.security }),
-             ...(toolInput.name && typeof toolInput.name === 'string' && { name: toolInput.name }),
+             ...(toolInput.name && typeof toolInput.name === 'string' && { name: toolInput.name }), // Keep name if provided
         };
+         // Ensure execute exists if provided directly (even if not strictly part of the interface type)
+         if (toolInput.execute && typeof toolInput.execute === 'function') {
+            formattedTool.execute = toolInput.execute;
+         } else if (!formattedTool.execute) {
+             // If execute wasn't found anywhere, it's an issue for a usable tool definition
+             // Note: This check might be too strict if the tool is only for API schema definition
+             // console.warn(`Tool definition for '${func.name}' is missing the 'execute' function. It can be sent to the API but not executed locally.`);
+         }
+
+        return formattedTool;
     }
 
-    if (typeof toolInput.name === 'string' && toolInput.name.length > 0) {
+    // Handle simplified format { name: "...", execute: ..., ... }
+    if (typeof toolInput.name === 'string' && toolInput.name.length > 0 && typeof (toolInput as any).execute === 'function') {
         const simplifiedTool = toolInput as any;
         const toolName = simplifiedTool.name;
 
-        if (simplifiedTool.execute !== undefined && typeof simplifiedTool.execute !== 'function') {
-             throw new ValidationError(`Invalid tool definition for '${toolName}' (simplified format): 'execute' must be a function if provided.`);
-         }
          if (simplifiedTool.description !== undefined && typeof simplifiedTool.description !== 'string') {
              throw new ValidationError(`Invalid tool definition for '${toolName}' (simplified format): 'description' must be a string if provided.`);
          }
@@ -354,27 +413,20 @@ export class ToolHandler {
 
         const functionDefinition: Tool['function'] = {
           name: toolName,
-          description: simplifiedTool.description || '',
+          description: simplifiedTool.description || '', // Provide empty description if missing
           ...(simplifiedTool.parameters && typeof simplifiedTool.parameters === 'object' && Object.keys(simplifiedTool.parameters).length > 0 && { parameters: simplifiedTool.parameters }),
         };
 
         const formattedTool: Tool = {
           type: 'function',
           function: functionDefinition,
-          ...(simplifiedTool.execute && { execute: simplifiedTool.execute }),
+          execute: simplifiedTool.execute, // Required in simplified format
           ...(simplifiedTool.security && { security: simplifiedTool.security }),
-           name: toolName,
+           name: toolName, // Include the name field as well
         };
-        // Ensure execute exists if provided
-        if (simplifiedTool.execute) {
-            formattedTool.execute = simplifiedTool.execute;
-        } else {
-             // Throw error if execute is missing in simplified format
-             throw new ValidationError(`Tool '${toolName}' (simplified format) requires an 'execute' function.`);
-        }
         return formattedTool;
     }
 
-    throw new ValidationError('Failed to format tool: Unknown structure. Provide either { type: "function", function: { name: ... } } or { name: "...", execute: ... }.');
+    throw new ValidationError('Failed to format tool: Unknown structure or missing required fields (e.g., function.name, execute). Provide either { type: "function", function: { name: ... } } or { name: "...", execute: ... }.');
   }
 }
