@@ -11,6 +11,7 @@ import {
     PluginConfig,
     ReasoningConfig,
     CreditBalance,
+    ApiKeyInfo,
     ModelPricingInfo,
     UsageInfo,
     OpenRouterRequestOptions,
@@ -22,6 +23,7 @@ import {
     API_ENDPOINT,
     DEFAULT_TIMEOUT,
     CREDITS_API_PATH,
+    API_KEY_INFO_PATH,
     MODELS_API_PATH,
     DEFAULT_API_BASE_URL,
     DEFAULT_REFERER_URL,
@@ -153,6 +155,8 @@ export class ApiHandler {
             }
         }
 
+        // Handle responseFormat and smart provider configuration
+        let finalProvider = provider;
         if (responseFormat) {
             if (responseFormat.type === 'json_object') {
                 body.response_format = { type: 'json_object' };
@@ -175,11 +179,21 @@ export class ApiHandler {
                     this.logger.warn('Unknown responseFormat type. Ignored.', responseFormat);
                 }
             }
+
+            if (body.response_format) {
+                if (!finalProvider) {
+                    finalProvider = { require_parameters: true };
+                    this.logger.debug("Automatically added 'require_parameters: true' to provider config due to 'responseFormat' usage.");
+                } else if (finalProvider.require_parameters !== true) {
+                    finalProvider = { ...finalProvider, require_parameters: true };
+                    this.logger.debug("Automatically set 'require_parameters: true' in provider config due to 'responseFormat' usage.");
+                }
+            }
         }
 
         if (route) body.route = route;
         if (transforms && transforms.length > 0) body.transforms = transforms;
-        if (provider) body.provider = provider;
+        if (finalProvider) body.provider = finalProvider;
         if (plugins && plugins.length > 0) body.plugins = plugins;
         if (reasoning) body.reasoning = reasoning;
 
@@ -218,11 +232,14 @@ export class ApiHandler {
         try {
             const response = await this.axiosInstance.get(creditsUrl, { baseURL: '' });
 
-            if (response.status === 200 && response.data?.data) {
-                const data = response.data.data;
-                if (typeof data.limit === 'number' && typeof data.usage === 'number') {
-                    const balance: CreditBalance = { limit: data.limit, usage: data.usage };
-                    this.logger.log(`Credit balance fetched: Limit=${balance.limit}, Usage=${balance.usage}`);
+            if (response.status === 200 && response.data) {
+                const data = response.data;
+                if (typeof data.total_credits === 'number' && typeof data.total_usage === 'number') {
+                    const balance: CreditBalance = { 
+                        total_credits: data.total_credits, 
+                        total_usage: data.total_usage 
+                    };
+                    this.logger.log(`Credit balance fetched: Total Credits=${balance.total_credits}, Total Usage=${balance.total_usage}`);
                     return balance;
                 } else {
                     this.logger.error('Invalid credit balance data received:', data);
@@ -235,6 +252,31 @@ export class ApiHandler {
         } catch (error) {
             const mappedError = mapError(error);
             this.logger.error(`Error fetching credit balance: ${mappedError.message}`, mappedError.details);
+            throw mappedError;
+        }
+    }
+
+    public async getApiKeyInfo(): Promise<ApiKeyInfo> {
+        if (!this.apiKey) {
+            throw new ConfigError('Cannot fetch API key info: API key is not set.');
+        }
+        const apiKeyUrl = `${this.apiBaseUrl}${API_KEY_INFO_PATH}`;
+        this.logger.log(`Fetching API key info from ${apiKeyUrl}...`);
+
+        try {
+            const response = await this.axiosInstance.get(apiKeyUrl, { baseURL: '' });
+
+            if (response.status === 200 && response.data?.data) {
+                const apiKeyInfo: ApiKeyInfo = response.data;
+                this.logger.log(`API key info fetched: Limit=${apiKeyInfo.data.limit}, Usage=${apiKeyInfo.data.usage}, Free Tier=${apiKeyInfo.data.is_free_tier}`);
+                return apiKeyInfo;
+            } else {
+                this.logger.error(`Failed to fetch API key info: Status ${response.status}`, response.data);
+                throw new APIError(`Failed to fetch API key info: Status ${response.status}`, response.status, response.data);
+            }
+        } catch (error) {
+            const mappedError = mapError(error);
+            this.logger.error(`Error fetching API key info: ${mappedError.message}`, mappedError.details);
             throw mappedError;
         }
     }

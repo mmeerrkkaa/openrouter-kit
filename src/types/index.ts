@@ -86,6 +86,7 @@ export interface ToolContext {
   userInfo?: UserAuthInfo;
   securityManager?: ISecurityManager;
   logger?: Logger;
+  includeToolResultInReport?: boolean;
 }
 
 export interface Tool {
@@ -98,6 +99,31 @@ export interface Tool {
   execute: (args: any, context?: ToolContext) => Promise<any> | any;
   security?: ToolSecurity;
   name?: string;
+}
+
+// --- Tool Call Reporting Types ---
+
+export type ToolCallStatus = 'success' | 'error_parsing' | 'error_validation' | 'error_security' | 'error_execution' | 'error_unknown' | 'error_not_found';
+
+export interface ToolCallDetail {
+    toolCallId: string;
+    toolName: string;
+    requestArgsString: string;
+    parsedArgs?: any | null;
+    status: ToolCallStatus;
+    result?: any | null;
+    error?: {
+        type: string;
+        message: string;
+        details?: any;
+    } | null;
+    resultString: string;
+    durationMs?: number;
+}
+
+export interface ToolCallOutcome {
+    message: Message;
+    details: ToolCallDetail;
 }
 
 // --- Security Related Types (Base definitions) ---
@@ -236,7 +262,7 @@ export interface OpenRouterConfig {
   // Core
   apiKey: string;
   apiEndpoint?: string;
-  apiBaseUrl?: string; // Ensure this exists
+  apiBaseUrl?: string;
   model?: string;
   debug?: boolean;
 
@@ -311,6 +337,7 @@ export interface OpenRouterRequestOptions {
   toolChoice?: "none" | "auto" | { type: "function", function: { name: string } } | null;
   parallelToolCalls?: boolean;
   maxToolCalls?: number;
+  includeToolResultInReport?: boolean;
 
   // Response Formatting
   responseFormat?: ResponseFormat | null;
@@ -355,6 +382,7 @@ export interface ChatCompletionResult {
   usage: UsageInfo | null;
   model: string;
   toolCallsCount: number;
+  toolCalls?: ToolCallDetail[];
   finishReason: string | null;
   durationMs: number;
   id?: string;
@@ -364,6 +392,18 @@ export interface ChatCompletionResult {
 }
 
 export interface CreditBalance {
-    limit: number;
-    usage: number;
+    total_credits: number;
+    total_usage: number;
+}
+
+export interface ApiKeyInfo {
+    data: {
+        limit: number;
+        usage: number;
+        is_free_tier: boolean;
+        rate_limit: {
+            requests: number;
+            interval: string;
+        };
+    };
 }

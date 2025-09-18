@@ -274,15 +274,17 @@ export class ChatProcessor {
 
             let toolResultsMessages: Message[] = [];
             try {
-                toolResultsMessages = await ToolHandler.handleToolCalls({
+                const outcomes = await ToolHandler.handleToolCalls({
                     message: assistantMessageWithTimestamp as Message & { tool_calls: ToolCall[] },
                     debug: this.config.debug,
                     tools: tools,
                     securityManager: this.securityManager || undefined,
                     userInfo: userInfo ?? null,
                     logger: this.logger.withPrefix(`ToolHandler(Depth ${depth})`),
-                    parallelCalls: requestOptions.parallelToolCalls ?? true
+                    parallelCalls: requestOptions.parallelToolCalls ?? true,
+                    includeToolResultInReport: requestOptions.includeToolResultInReport ?? false
                 });
+                toolResultsMessages = outcomes.map(o => o.message);
             } catch (toolHandlerError) {
                 const mappedError = mapError(toolHandlerError);
                 this.logger.error(`(Depth ${depth}) Error during tool execution: ${mappedError.message}`, mappedError.details);

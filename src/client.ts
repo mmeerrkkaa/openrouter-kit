@@ -7,6 +7,7 @@ import {
     UserAuthInfo,
     ChatCompletionResult,
     CreditBalance,
+    ApiKeyInfo,
     ModelPricingInfo,
     OpenRouterPlugin,
     MiddlewareFunction,
@@ -15,6 +16,8 @@ import {
     HistoryEntry,
     ApiCallMetadata,
     ToolCall,
+    ToolCallDetail,
+    ToolCallOutcome
   } from './types';
   import { ToolHandler } from './tool-handler';
   import { formatDateTime } from './utils/formatting';
@@ -431,9 +434,13 @@ import {
           }
       }
   
-      public async getCreditBalance(): Promise<CreditBalance> {
-          return this.apiHandler.getCreditBalance();
-      }
+          public async getCreditBalance(): Promise<CreditBalance> {
+        return this.apiHandler.getCreditBalance();
+    }
+
+    public async getApiKeyInfo(): Promise<ApiKeyInfo> {
+        return this.apiHandler.getApiKeyInfo();
+    }
   
       public getModelPrices(): Record<string, ModelPricingInfo> {
           if (!this.costTracker) {
@@ -541,7 +548,7 @@ import {
            if (this.securityManager && accessToken) {
                try { userInfo = await this.securityManager.authenticateUser(accessToken); } catch (e) { /* ignore */ }
            }
-           return ToolHandler.handleToolCalls({
+           const outcomes = await ToolHandler.handleToolCalls({
                message: message as Message & { tool_calls: ToolCall[] },
                debug: this.isDebugMode(),
                tools: tools,
@@ -549,6 +556,8 @@ import {
                userInfo: userInfo,
                logger: this.logger.withPrefix('ToolHandler(Deprecated)'),
                parallelCalls: true,
+               includeToolResultInReport: false
            });
+           return outcomes.map(o => o.message);
       }
   }
