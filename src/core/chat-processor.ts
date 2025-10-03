@@ -12,6 +12,8 @@ import {
     ApiCallMetadata,
     UrlCitationAnnotation,
     ToolCall,
+    ToolCallDetail,
+    ToolCallOutcome 
 } from '../types';
 import { ApiHandler } from './api-handler';
 import { UnifiedHistoryManager } from '../history/unified-history-manager';
@@ -28,6 +30,7 @@ interface HandleApiResponseResult {
     usage: UsageInfo | null;
     model: string;
     toolCallsCount: number;
+    toolCalls?: ToolCallDetail[];
     finishReason: string | null;
     id?: string;
     cost?: number | null;
@@ -100,7 +103,8 @@ export class ChatProcessor {
             temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
             stop, logitBias, seed, route, transforms, responseFormat, provider, models, plugins, reasoning,
             parallelToolCalls = undefined,
-            toolChoice
+            toolChoice,
+            includeToolResultInReport = false // Get option from request
         } = requestOptions;
 
         const initialRequestBody = this.apiHandler.buildChatRequestBody({
@@ -117,11 +121,13 @@ export class ChatProcessor {
 
         const initialResponse = await this.apiHandler.sendChatRequest(initialRequestBody, 0);
 
-        const recursiveRequestOptions: Partial<OpenRouterRequestOptions> & { model: string } = {
+        // Pass includeToolResultInReport down
+        const recursiveRequestOptions: Partial<OpenRouterRequestOptions> & { model: string, includeToolResultInReport?: boolean } = {
             model,
             temperature, maxTokens, topP, presencePenalty, frequencyPenalty,
             stop, logitBias, seed, route, transforms, responseFormat, provider, models, plugins, reasoning,
-            parallelToolCalls: tools && tools.length > 0 ? (parallelToolCalls ?? true) : undefined
+            parallelToolCalls: tools && tools.length > 0 ? (parallelToolCalls ?? true) : undefined,
+            includeToolResultInReport // Pass the option
         };
 
         const result = await this._handleApiResponseInternal({
@@ -134,7 +140,8 @@ export class ChatProcessor {
             requestOptions: recursiveRequestOptions,
             maxToolCalls,
             cumulativeUsage: null,
-            cumulativeToolCalls: 0
+            cumulativeToolCalls: 0,
+            cumulativeToolCallDetails: []
         });
 
         return result;
@@ -148,14 +155,15 @@ export class ChatProcessor {
         userInfo?: UserAuthInfo | null;
         strictJsonParsing: boolean;
         depth: number;
-        requestOptions: Partial<OpenRouterRequestOptions> & { model: string };
+        requestOptions: Partial<OpenRouterRequestOptions> & { model: string, includeToolResultInReport?: boolean }; // Include option type
         maxToolCalls: number;
         cumulativeUsage: UsageInfo | null;
         cumulativeToolCalls: number;
+        cumulativeToolCallDetails: ToolCallDetail[]; // Add parameter
     }): Promise<HandleApiResponseResult> {
         const {
             response, currentMessages: messagesForThisCall, tools, userInfo, strictJsonParsing, depth,
-            requestOptions, maxToolCalls, cumulativeUsage, cumulativeToolCalls
+            requestOptions, maxToolCalls, cumulativeUsage, cumulativeToolCalls, cumulativeToolCallDetails // Destructure new param
         } = params;
 
         const responseData = response.data;
@@ -168,6 +176,7 @@ export class ChatProcessor {
         this.logger.debug(`(Depth ${depth}) Cumulative Usage:`, currentCumulativeUsage);
 
         const stepCost = this.costTracker?.calculateCost(responseModel, responseData?.usage) ?? null;
+        // Note: Cumulative cost calculation based on cumulative usage might be slightly inaccurate if model changes mid-request due to fallbacks
         const cumulativeCost = this.costTracker?.calculateCost(responseModel, currentCumulativeUsage) ?? null;
 
         this.logger.debug(`(Depth ${depth}) API response data summary:`, { id: responseData?.id, model: responseModel, choicesCount: responseData?.choices?.length, usage: responseData?.usage, error: responseData?.error });
@@ -197,9 +206,12 @@ export class ChatProcessor {
 
             currentApiCallMetadata.finishReason = mappedError.code || 'error';
 
+            // Return existing tool call details even if the API call failed
             return {
                 content: null, usage: currentCumulativeUsage, model: responseModel,
-                toolCallsCount: cumulativeToolCalls, finishReason: currentApiCallMetadata.finishReason,
+                toolCallsCount: cumulativeToolCalls,
+                toolCalls: cumulativeToolCallDetails, // Include collected details
+                finishReason: currentApiCallMetadata.finishReason,
                 id: currentApiCallMetadata.callId, cost: cumulativeCost, reasoning: null,
                 annotations: [], apiCallMetadata: currentApiCallMetadata, newlyAddedMessages: [],
             };
@@ -210,7 +222,9 @@ export class ChatProcessor {
             currentApiCallMetadata.finishReason = 'error_no_choices';
             return {
                 content: null, usage: currentCumulativeUsage, model: responseModel,
-                toolCallsCount: cumulativeToolCalls, finishReason: currentApiCallMetadata.finishReason,
+                toolCallsCount: cumulativeToolCalls,
+                toolCalls: cumulativeToolCallDetails, // Include collected details
+                finishReason: currentApiCallMetadata.finishReason,
                 id: currentApiCallMetadata.callId, cost: cumulativeCost, reasoning: null,
                 annotations: [], apiCallMetadata: currentApiCallMetadata, newlyAddedMessages: [],
             };
@@ -224,7 +238,9 @@ export class ChatProcessor {
             currentApiCallMetadata.finishReason = 'error_no_message';
             return {
                 content: null, usage: currentCumulativeUsage, model: responseModel,
-                toolCallsCount: cumulativeToolCalls, finishReason: currentApiCallMetadata.finishReason,
+                toolCallsCount: cumulativeToolCalls,
+                toolCalls: cumulativeToolCallDetails, // Include collected details
+                finishReason: currentApiCallMetadata.finishReason,
                 id: currentApiCallMetadata.callId, cost: cumulativeCost, reasoning: null,
                 annotations: [], apiCallMetadata: currentApiCallMetadata, newlyAddedMessages: [],
             };
@@ -243,15 +259,19 @@ export class ChatProcessor {
         const messagesForNextCall = [...messagesForThisCall, assistantMessageWithTimestamp];
         const finishReason = choice.finish_reason;
         let currentToolCallsCount = cumulativeToolCalls;
+        let currentToolCallDetails = [...cumulativeToolCallDetails]; // Copy details for this branch
 
         // Handle Tool Calls
         if (finishReason === 'tool_calls' && assistantMessageFromAPI.tool_calls?.length) {
             if (!tools || tools.length === 0) {
                 this.logger.error(`(Depth ${depth}) API requested tool calls, but no tools were provided.`);
                 currentApiCallMetadata.finishReason = 'error_missing_tools';
+                // Include assistant message even if tools are missing
                 return {
                     content: null, usage: currentCumulativeUsage, model: responseModel,
-                    toolCallsCount: currentToolCallsCount, finishReason: currentApiCallMetadata.finishReason,
+                    toolCallsCount: currentToolCallsCount,
+                    toolCalls: currentToolCallDetails,
+                    finishReason: currentApiCallMetadata.finishReason,
                     id: currentApiCallMetadata.callId, cost: cumulativeCost, reasoning: null,
                     annotations: [], apiCallMetadata: currentApiCallMetadata, newlyAddedMessages: [assistantMessageWithTimestamp]
                 };
@@ -266,15 +286,18 @@ export class ChatProcessor {
                 currentApiCallMetadata.finishReason = 'error_max_tool_depth';
                 return {
                     content: null, usage: currentCumulativeUsage, model: responseModel,
-                    toolCallsCount: currentToolCallsCount, finishReason: currentApiCallMetadata.finishReason,
+                    toolCallsCount: currentToolCallsCount,
+                    toolCalls: currentToolCallDetails,
+                    finishReason: currentApiCallMetadata.finishReason,
                     id: currentApiCallMetadata.callId, cost: cumulativeCost, reasoning: null,
                     annotations: [], apiCallMetadata: currentApiCallMetadata, newlyAddedMessages: [assistantMessageWithTimestamp]
                 };
             }
 
-            let toolResultsMessages: Message[] = [];
+            let toolOutcomes: ToolCallOutcome[] = [];
             try {
-                const outcomes = await ToolHandler.handleToolCalls({
+                // Pass includeToolResultInReport option to handler
+                toolOutcomes = await ToolHandler.handleToolCalls({
                     message: assistantMessageWithTimestamp as Message & { tool_calls: ToolCall[] },
                     debug: this.config.debug,
                     tools: tools,
@@ -284,49 +307,58 @@ export class ChatProcessor {
                     parallelCalls: requestOptions.parallelToolCalls ?? true,
                     includeToolResultInReport: requestOptions.includeToolResultInReport ?? false
                 });
-                toolResultsMessages = outcomes.map(o => o.message);
             } catch (toolHandlerError) {
                 const mappedError = mapError(toolHandlerError);
                 this.logger.error(`(Depth ${depth}) Error during tool execution: ${mappedError.message}`, mappedError.details);
                 currentApiCallMetadata.finishReason = 'error_tool_execution';
+                // Include assistant message and any *previous* tool details
                 return {
                     content: null, usage: currentCumulativeUsage, model: responseModel,
-                    toolCallsCount: currentToolCallsCount, finishReason: currentApiCallMetadata.finishReason,
+                    toolCallsCount: currentToolCallsCount,
+                    toolCalls: currentToolCallDetails, // Use details accumulated *before* this failed batch
+                    finishReason: currentApiCallMetadata.finishReason,
                     id: currentApiCallMetadata.callId, cost: cumulativeCost, reasoning: null,
                     annotations: [], apiCallMetadata: currentApiCallMetadata, newlyAddedMessages: [assistantMessageWithTimestamp]
                 };
             }
 
+            // Process outcomes: extract messages and details
+            const toolResultsMessages = toolOutcomes.map(outcome => outcome.message);
+            const newToolDetails = toolOutcomes.map(outcome => outcome.details);
+            currentToolCallDetails.push(...newToolDetails); // Add details from this batch
+
             const toolResultsWithTimestamps = toolResultsMessages.map(msg => ({
                 ...msg, timestamp: msg.timestamp || formatDateTime()
             }));
             messagesForNextCall.push(...toolResultsWithTimestamps);
-            newlyAddedMessages.push(...toolResultsWithTimestamps);
+            newlyAddedMessages.push(...toolResultsWithTimestamps); // Add tool results to newly added messages
             this.logger.debug(`(Depth ${depth}) Added ${toolResultsMessages.length} tool result messages.`);
 
             this.logger.log(`(Depth ${depth + 1}) Sending tool results back to LLM...`);
             const nextRequestBody = this.apiHandler.buildChatRequestBody({
-                ...requestOptions,
-                model: responseModel,
+                ...requestOptions, // Pass all options down
+                model: responseModel, // Use the model determined by the API response
                 messages: messagesForNextCall,
-                tools: tools?.map(ToolHandler.formatToolForAPI) || null,
-                toolChoice: 'auto',
+                tools: tools || null, // Send tool definitions again
+                toolChoice: 'auto', // Let model decide next step
                 filterMessagesForApi: this.filterMessagesForApi
             });
 
             const nextResponse = await this.apiHandler.sendChatRequest(nextRequestBody, depth + 1);
 
+            // Recursive call, passing accumulated details
             return await this._handleApiResponseInternal({
-                ...params,
+                ...params, // Pass most params down
                 response: nextResponse,
                 currentMessages: messagesForNextCall,
                 depth: depth + 1,
                 cumulativeUsage: currentCumulativeUsage,
-                cumulativeToolCalls: currentToolCallsCount
+                cumulativeToolCalls: currentToolCallsCount,
+                cumulativeToolCallDetails: currentToolCallDetails // Pass updated details array
             });
 
         } else {
-            // Handle Final Response
+            // Handle Final Response (finishReason is not 'tool_calls' or no tool_calls present)
             this.logger.log(`(Depth ${depth}) Received final response. Finish Reason: ${finishReason}`);
             const rawContent = assistantMessageFromAPI.content;
             let finalResultContent: any = null;
@@ -339,9 +371,12 @@ export class ChatProcessor {
                         finalResultContent = this._parseAndValidateJsonResponse(rawContent, requestedFormat, strictJsonParsing);
                     } catch (parseValidationError) {
                         currentApiCallMetadata.finishReason = mapError(parseValidationError).code || 'error_json_validation';
+                        // Include accumulated tool details in the error response
                         return {
                             content: null, usage: currentCumulativeUsage, model: responseModel,
-                            toolCallsCount: currentToolCallsCount, finishReason: currentApiCallMetadata.finishReason,
+                            toolCallsCount: currentToolCallsCount,
+                            toolCalls: currentToolCallDetails,
+                            finishReason: currentApiCallMetadata.finishReason,
                             id: currentApiCallMetadata.callId, cost: cumulativeCost, reasoning: null,
                             annotations: [], apiCallMetadata: currentApiCallMetadata, newlyAddedMessages: [assistantMessageWithTimestamp]
                         };
@@ -352,14 +387,17 @@ export class ChatProcessor {
                         currentApiCallMetadata.finishReason = 'error_invalid_json_type';
                         return {
                             content: null, usage: currentCumulativeUsage, model: responseModel,
-                            toolCallsCount: currentToolCallsCount, finishReason: currentApiCallMetadata.finishReason,
+                            toolCallsCount: currentToolCallsCount,
+                            toolCalls: currentToolCallDetails,
+                            finishReason: currentApiCallMetadata.finishReason,
                             id: currentApiCallMetadata.callId, cost: cumulativeCost, reasoning: null,
                             annotations: [], apiCallMetadata: currentApiCallMetadata, newlyAddedMessages: [assistantMessageWithTimestamp]
                         };
                     } else {
-                        finalResultContent = null;
+                        finalResultContent = null; // Or maybe the raw content? Decided null for consistency.
                     }
                 } else {
+                    // Not JSON requested or content is already structured (less common for final response)
                     finalResultContent = rawContent;
                 }
             } else {
@@ -369,26 +407,29 @@ export class ChatProcessor {
 
             this.logger.debug(`(Depth ${depth}) Final processed result content:`, finalResultContent);
 
-            const finalAssistantMessage = newlyAddedMessages[0];
+            const finalAssistantMessage = newlyAddedMessages[0]; // The assistant's final message
             const reasoning = finalAssistantMessage?.reasoning ?? null;
             const annotations = finalAssistantMessage?.annotations ?? [];
 
+            // Return the final result including accumulated tool call details
             return {
                 content: finalResultContent,
                 usage: currentCumulativeUsage,
                 model: responseModel,
                 toolCallsCount: currentToolCallsCount,
+                toolCalls: currentToolCallDetails, // Include the details
                 finishReason: finishReason,
                 id: responseData.id,
                 cost: cumulativeCost,
                 reasoning: reasoning,
                 annotations: annotations,
                 apiCallMetadata: currentApiCallMetadata,
-                newlyAddedMessages: newlyAddedMessages,
+                newlyAddedMessages: newlyAddedMessages, // Include the final assistant message
             };
         }
     }
 
+    // _parseAndValidateJsonResponse remains the same
     private _parseAndValidateJsonResponse(
         rawContent: string,
         requestedFormat: ResponseFormat,
@@ -432,5 +473,3 @@ export class ChatProcessor {
         }
     }
 }
-
-export {};

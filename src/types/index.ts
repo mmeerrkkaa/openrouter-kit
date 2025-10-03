@@ -2,6 +2,8 @@
 import type { AxiosRequestConfig } from 'axios';
 import type { ISecurityManager } from '../security/types';
 import type { Logger } from '../utils/logger';
+// Import ErrorCode for use in ToolCallDetail
+import { ErrorCode } from '../utils/error';
 
 // --- Plugin and Middleware Types ---
 
@@ -29,8 +31,7 @@ export type MiddlewareFunction = (
 
 // --- History Storage Related Types ---
 
-/** Metadata associated with the API call that produced a message or group of messages. */
-export interface ApiCallMetadata { // EXPORTED
+export interface ApiCallMetadata {
     callId: string;
     modelUsed: string;
     usage: UsageInfo | null;
@@ -40,8 +41,7 @@ export interface ApiCallMetadata { // EXPORTED
     requestMessagesCount?: number;
 }
 
-/** Represents a single entry in the history, linking a message to its originating API call. */
-export interface HistoryEntry { // EXPORTED
+export interface HistoryEntry {
     message: Message;
     apiCallMetadata?: ApiCallMetadata | null;
 }
@@ -49,8 +49,8 @@ export interface HistoryEntry { // EXPORTED
 // --- History Storage Adapter Interface ---
 
 export interface IHistoryStorage {
-  load(key: string): Promise<HistoryEntry[]>; // Uses HistoryEntry
-  save(key: string, entries: HistoryEntry[]): Promise<void>; // Uses HistoryEntry
+  load(key: string): Promise<HistoryEntry[]>;
+  save(key: string, entries: HistoryEntry[]): Promise<void>;
   delete(key: string): Promise<void>;
   listKeys(): Promise<string[]>;
   destroy?: () => Promise<void> | void;
@@ -76,7 +76,7 @@ export interface ToolCall {
   type: 'function';
   function: {
     name: string;
-    arguments: string;
+    arguments: string; // Arguments as a JSON string from the LLM
   };
 }
 
@@ -94,11 +94,11 @@ export interface Tool {
   function: {
     name: string;
     description?: string;
-    parameters?: Record<string, any>;
+    parameters?: Record<string, any>; // JSON Schema
   };
   execute: (args: any, context?: ToolContext) => Promise<any> | any;
   security?: ToolSecurity;
-  name?: string;
+  name?: string; // Optional alternative name (used if function.name is missing?)
 }
 
 // --- Tool Call Reporting Types ---
@@ -108,23 +108,25 @@ export type ToolCallStatus = 'success' | 'error_parsing' | 'error_validation' | 
 export interface ToolCallDetail {
     toolCallId: string;
     toolName: string;
-    requestArgsString: string;
-    parsedArgs?: any | null;
+    requestArgsString: string; // Raw arguments string from LLM
+    parsedArgs?: any | null;   // Arguments after JSON parsing
     status: ToolCallStatus;
-    result?: any | null;
+    result?: any | null;       // Result from execute() - included based on option
     error?: {
-        type: string;
+        type: string;          // ErrorCode enum value
         message: string;
         details?: any;
     } | null;
-    resultString: string;
+    resultString: string;      // The final string content sent back to the LLM (JSON result or JSON error)
     durationMs?: number;
 }
 
+// Represents the outcome of processing a single tool call internally
 export interface ToolCallOutcome {
-    message: Message;
-    details: ToolCallDetail;
+    message: Message;          // The 'tool' role message to send back to LLM
+    details: ToolCallDetail;   // The detailed report for this call
 }
+
 
 // --- Security Related Types (Base definitions) ---
 
@@ -142,7 +144,7 @@ export interface DangerousArgumentsConfig {
 export interface ToolSecurity {
   requiredRole?: string | string[];
   requiredScopes?: string | string[];
-  rateLimit?: RateLimit;
+  rateLimit?: RateLimit; // Base RateLimit type here
 }
 
 export interface UserAuthConfig {
@@ -164,13 +166,13 @@ export interface ToolAccessConfig {
   allow?: boolean;
   roles?: string | string[];
   scopes?: string | string[];
-  rateLimit?: RateLimit;
+  rateLimit?: RateLimit; // Base RateLimit type here
   allowedApiKeys?: string[];
 }
 
 export interface RoleConfig {
   allowedTools?: string | string[] | '*';
-  rateLimits?: Record<string, RateLimit>;
+  rateLimits?: Record<string, RateLimit>; // Base RateLimit type here
 }
 
 export interface RolesConfig {
@@ -183,13 +185,14 @@ export interface SecurityConfig {
   toolAccess?: Record<string, ToolAccessConfig>;
   roles?: RolesConfig;
   requireAuthentication?: boolean;
+  // Note: Extended SecurityConfig is defined in security/types.ts
 }
 
 // --- Event Types ---
 
 export interface ToolCallEvent {
   toolName: string;
-  userId: string;
+  userId: string; // Can be 'anonymous'
   args: any;
   result: any;
   success: boolean;
@@ -278,7 +281,7 @@ export interface OpenRouterConfig {
   axiosConfig?: AxiosRequestConfig;
 
   // History Management
-  historyAdapter?: IHistoryStorage; // Uses updated IHistoryStorage
+  historyAdapter?: IHistoryStorage;
   historyTtl?: number;
   historyCleanupInterval?: number;
   /** @deprecated Use historyAdapter */
@@ -298,7 +301,7 @@ export interface OpenRouterConfig {
   strictJsonParsing?: boolean;
 
   // Security
-  security?: SecurityConfig;
+  security?: SecurityConfig; // Base SecurityConfig type here
 
   // Cost Tracking
   enableCostTracking?: boolean;

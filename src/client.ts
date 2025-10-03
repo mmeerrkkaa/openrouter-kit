@@ -5,7 +5,7 @@ import {
     Message,
     Tool,
     UserAuthInfo,
-    ChatCompletionResult,
+    ChatCompletionResult, // Now includes toolCalls?: ToolCallDetail[]
     CreditBalance,
     ApiKeyInfo,
     ModelPricingInfo,
@@ -43,46 +43,46 @@ import {
   import { CostTracker } from './cost-tracker';
   import { UnifiedHistoryManager } from './history/unified-history-manager';
   import { MemoryHistoryStorage } from './history/memory-storage';
-  import { HistoryAnalyzer } from './history/history-analyzer'; // Already imported
-  
+  import { HistoryAnalyzer } from './history/history-analyzer';
+
   // --- Import Core Components ---
   import { ApiHandler } from './core/api-handler';
   import { ChatProcessor } from './core/chat-processor';
   import { PluginManager } from './core/plugin-manager';
   import { prepareMessagesForApi, filterHistoryForApi } from './core/message-preparer';
-  
+
   export class OpenRouterClient {
       private config: OpenRouterConfig;
       private logger: Logger;
       private clientEventEmitter: SimpleEventEmitter;
-  
+
       // Core Logic Components
       private apiHandler: ApiHandler;
       private chatProcessor: ChatProcessor;
       private pluginManager: PluginManager;
-  
+
       // Managers
       private unifiedHistoryManager: UnifiedHistoryManager;
       private securityManager: SecurityManager | null;
       private costTracker: CostTracker | null;
       private historyAnalyzer: HistoryAnalyzer;
-  
+
       // State
       private currentModel: string;
-  
+
       constructor(config: OpenRouterConfig) {
           validateConfig(config);
           this.config = config;
-  
+
           const debugMode = config.debug ?? false;
           this.logger = new Logger({ debug: debugMode, prefix: 'OpenRouterClient' });
           jsonUtils.setJsonUtilsLogger(this.logger.withPrefix('JsonUtils'));
           this.clientEventEmitter = new SimpleEventEmitter();
           this.logger.log('Initializing OpenRouter Kit v2 (Refactored)...');
-  
+
           this.unifiedHistoryManager = this._initializeHistoryManager(config);
           this.securityManager = this._initializeSecurityManager(config);
-  
+
           this.apiHandler = new ApiHandler({
               apiKey: config.apiKey,
               apiEndpoint: config.apiEndpoint,
@@ -94,11 +94,11 @@ import {
               logger: this.logger,
               debug: debugMode,
           });
-  
+
           this.costTracker = this._initializeCostTracker(config, this.apiHandler.getAxiosInstance());
           this.pluginManager = new PluginManager(this.logger);
           this.historyAnalyzer = new HistoryAnalyzer(this.unifiedHistoryManager, this.logger);
-  
+
           this.chatProcessor = new ChatProcessor(
               {
                   apiHandler: this.apiHandler,
@@ -115,13 +115,13 @@ import {
                   debug: debugMode
               }
           );
-  
+
           this.currentModel = config.model || DEFAULT_MODEL;
           this.logger.log('OpenRouter Kit successfully initialized.');
       }
-  
+
       // --- Initialization Helpers ---
-  
+
       private _initializeHistoryManager(config: OpenRouterConfig): UnifiedHistoryManager {
           let historyAdapter: IHistoryStorage;
           if (config.historyAdapter) {
@@ -141,10 +141,11 @@ import {
           this.logger.log(`HistoryManager initialized with adapter: ${historyAdapter.constructor.name}`);
           return manager;
       }
-  
+
       private _initializeSecurityManager(config: OpenRouterConfig): SecurityManager | null {
           if (config.security) {
-              const manager = new SecurityManager(config.security, config.debug ?? false);
+              // Cast to ExtendedSecurityConfig if necessary, assuming SecurityManager constructor handles it
+              const manager = new SecurityManager(config.security as any, config.debug ?? false);
               this.logger.log('SecurityManager initialized.');
               return manager;
           } else {
@@ -152,7 +153,7 @@ import {
               return null;
           }
       }
-  
+
       private _initializeCostTracker(config: OpenRouterConfig, axiosInstance: any): CostTracker | null {
            if (config.enableCostTracking) {
                this.logger.log('Cost tracking enabled. Initializing CostTracker...');
@@ -177,35 +178,34 @@ import {
                return null;
            }
        }
-  
-  
+
       // --- Core Chat Logic ---
-  
+
       public async chat(options: OpenRouterRequestOptions): Promise<ChatCompletionResult> {
           const chatStartTime = Date.now();
           const logIdentifier = options.prompt
               ? `prompt: "${options.prompt.substring(0, 50)}..."`
               : `customMessages: ${options.customMessages?.length ?? 0}`;
           this.logger.log(`Processing chat request (${logIdentifier})...`);
-  
+
           const ctx: MiddlewareContext = {
-              request: { options },
+              request: { options }, // Pass full options including includeToolResultInReport
               metadata: {}
           };
-  
+
           let finalResult: ChatCompletionResult | null = null;
           let processingError: OpenRouterError | null = null;
           let entriesToSave: HistoryEntry[] = [];
-  
+
           try {
               await this.pluginManager.runMiddlewares(ctx, async () => {
-                  // --- Core Logic inside Middleware ---
+                  // Core Logic inside Middleware
                   const effectiveOptions = ctx.request.options;
-  
+
                   if (!effectiveOptions.customMessages && !effectiveOptions.prompt) {
                       throw new ConfigError("'prompt' or 'customMessages' must be provided in options");
                   }
-  
+
                   // 1. Authentication / Authorization
                   let userInfo: UserAuthInfo | null = null;
                   if (this.securityManager) {
@@ -223,7 +223,7 @@ import {
                   } else if (effectiveOptions.accessToken) {
                        this.logger.warn('accessToken provided, but SecurityManager not configured.');
                    }
-  
+
                   // 2. Load History
                   let initialHistoryEntries: HistoryEntry[] = [];
                   const user = effectiveOptions.user;
@@ -237,7 +237,7 @@ import {
                           this.logger.error(`Error loading history entries for key '${historyKey}':`, mapError(histError));
                       }
                   }
-  
+
                   // 3. Prepare Initial Messages for API
                   const initialMessages = await prepareMessagesForApi(
                       {
@@ -252,7 +252,7 @@ import {
                       this.unifiedHistoryManager,
                       this.logger
                   );
-  
+
                   // 4. Prepare initial HistoryEntry for the user prompt
                   entriesToSave = [];
                   if (effectiveOptions.prompt) {
@@ -266,15 +266,17 @@ import {
                           entriesToSave.push({ message: messageWithTimestamp, apiCallMetadata: null });
                       }
                   }
-  
+
                   // 5. Process Chat via ChatProcessor
+                  // Pass the full effectiveOptions, which includes includeToolResultInReport
                   const processorResult = await this.chatProcessor.processChat({
                       initialMessages: initialMessages,
                       requestOptions: effectiveOptions,
                       userInfo: userInfo,
                   });
-  
+
                   // 6. Associate Metadata and Prepare History Entries for Saving
+                  // Note: Newly added messages now include the final assistant message AND tool result messages
                   if (processorResult.apiCallMetadata) {
                       const metadata = processorResult.apiCallMetadata;
                       processorResult.newlyAddedMessages.forEach((msg: Message) => {
@@ -282,19 +284,21 @@ import {
                           entriesToSave.push({ message: messageWithTimestamp, apiCallMetadata: metadata });
                       });
                   } else {
+                      // This case might be less common now if metadata is always generated
                       processorResult.newlyAddedMessages.forEach((msg: Message) => {
                            const messageWithTimestamp = { ...msg, timestamp: msg.timestamp || formatDateTime() };
                           entriesToSave.push({ message: messageWithTimestamp, apiCallMetadata: null });
                       });
                   }
-  
-                  // 7. Construct Final Result
+
+                  // 7. Construct Final Result (now includes toolCalls details)
                   const duration = Date.now() - chatStartTime;
                   finalResult = {
                       content: processorResult.content,
                       usage: processorResult.usage,
                       model: processorResult.model,
                       toolCallsCount: processorResult.toolCallsCount,
+                      toolCalls: processorResult.toolCalls, // Include the details array
                       finishReason: processorResult.finishReason,
                       durationMs: duration,
                       id: processorResult.id,
@@ -302,12 +306,12 @@ import {
                       reasoning: processorResult.reasoning,
                       annotations: processorResult.annotations,
                   };
-  
+
                   this.logger.log(`Chat request (${logIdentifier}) processed successfully in ${finalResult.durationMs} ms.`);
                   ctx.response = { ...(ctx.response || {}), result: finalResult };
-  
+
               }); // End of core logic inside middleware
-  
+
           } catch (error) {
               processingError = mapError(error);
               this.logger.error(`Error during chat processing (${logIdentifier}): ${processingError.message}`, processingError.details || processingError);
@@ -316,13 +320,14 @@ import {
                    ctx.response = { ...(ctx.response || {}), error: processingError };
               }
           }
-  
+
           // --- History Saving ---
           const user = options.user;
           const group = options.group;
           if (user && Array.isArray(entriesToSave) && entriesToSave.length > 0) {
               const historyKey = this._getHistoryKey(user, group);
               try {
+                  // Save all generated messages (user prompt, assistant, tool results)
                   await this.unifiedHistoryManager.addHistoryEntries(historyKey, entriesToSave);
                   this.logger.debug(`Saved ${entriesToSave.length} history entries for key '${historyKey}' (Success: ${!processingError}).`);
               } catch (histError) {
@@ -331,7 +336,7 @@ import {
           } else if (user) {
                this.logger.debug(`No new history entries to save for key '${this._getHistoryKey(user, group)}'.`);
            }
-  
+
           // --- Final Return/Throw ---
           if (ctx.response?.error) {
               throw ctx.response.error;
@@ -339,14 +344,14 @@ import {
           if (finalResult) {
               return finalResult;
           }
-  
+
           this.logger.error("Chat processing finished unexpectedly without a result or error.");
           throw new OpenRouterError('Chat processing did not produce a result or error', ErrorCode.INTERNAL_ERROR);
       }
-  
-  
+
+
       // --- Helper Methods ---
-  
+
       private _getHistoryKey(user: string, group?: string | null): string {
           if (!user || typeof user !== 'string') {
               throw new ConfigError('User ID must be a non-empty string for history management.');
@@ -359,49 +364,46 @@ import {
           }
           return key;
       }
-  
+
       private _handleError(error: OpenRouterError): void {
           const finalError = mapError(error);
           this.clientEventEmitter.emit('error', finalError);
       }
-  
+
       // --- Public API Methods ---
-  
+
       public getHistoryManager(): UnifiedHistoryManager {
           return this.unifiedHistoryManager;
       }
-  
-      // Add getter for HistoryAnalyzer
+
       public getHistoryAnalyzer(): HistoryAnalyzer {
-          // Ensure analyzer is initialized (it should be in constructor)
           if (!this.historyAnalyzer) {
                this.logger.warn("HistoryAnalyzer accessed before initialization.");
-               // Re-initialize if needed, though this indicates a potential issue elsewhere
                this.historyAnalyzer = new HistoryAnalyzer(this.unifiedHistoryManager, this.logger);
           }
           return this.historyAnalyzer;
       }
-  
+
       public isDebugMode(): boolean {
           return this.logger.isDebugEnabled();
       }
-  
+
       public getSecurityManager(): SecurityManager | null {
           return this.securityManager;
       }
-  
+
       public isSecurityEnabled(): boolean {
           return this.securityManager !== null;
       }
-  
+
       public getCostTracker(): CostTracker | null {
           return this.costTracker;
       }
-  
+
       public getDefaultModel(): string {
           return this.currentModel;
       }
-  
+
       public setModel(model: string): void {
           if (!model || typeof model !== 'string') {
               throw new ConfigError('Model name must be a non-empty string');
@@ -412,7 +414,7 @@ import {
               this.chatProcessor['config'].defaultModel = model;
           }
       }
-  
+
       public setApiKey(apiKey: string): void {
           if (!apiKey || typeof apiKey !== 'string') {
               throw new ConfigError('API key must be a non-empty string');
@@ -421,27 +423,28 @@ import {
           this.apiHandler.updateApiKey(apiKey);
           this.logger.log('API key successfully updated.');
       }
-  
+
       public createAccessToken(userInfo: Omit<UserAuthInfo, 'expiresAt'>, expiresIn?: string | number): string {
           if (!this.securityManager) {
               throw new ConfigError('Cannot create token: SecurityManager not configured.');
           }
           this.logger.log(`Requesting access token creation via SecurityManager for user ${userInfo.userId}...`);
           try {
+              // Cast to the ExtendedUserAuthInfo expected by SecurityManager internally
               return this.securityManager.createAccessToken(userInfo as Omit<import('./security/types').ExtendedUserAuthInfo, 'expiresAt'>, expiresIn);
           } catch (error) {
               throw mapError(error);
           }
       }
-  
-          public async getCreditBalance(): Promise<CreditBalance> {
-        return this.apiHandler.getCreditBalance();
-    }
 
-    public async getApiKeyInfo(): Promise<ApiKeyInfo> {
-        return this.apiHandler.getApiKeyInfo();
-    }
-  
+      public async getCreditBalance(): Promise<CreditBalance> {
+          return this.apiHandler.getCreditBalance();
+      }
+
+      public async getApiKeyInfo(): Promise<ApiKeyInfo> {
+          return this.apiHandler.getApiKeyInfo();
+      }
+
       public getModelPrices(): Record<string, ModelPricingInfo> {
           if (!this.costTracker) {
               this.logger.warn("Cannot get model prices: Cost tracking is disabled.");
@@ -449,7 +452,7 @@ import {
           }
           return this.costTracker.getAllModelPrices();
       }
-  
+
       public async refreshModelPrices(): Promise<void> {
           if (!this.costTracker) {
               this.logger.warn("Cannot refresh model prices: Cost tracking is disabled.");
@@ -457,7 +460,7 @@ import {
           }
           await this.costTracker.fetchModelPrices();
       }
-  
+
       // --- Event Handling ---
       public on(event: string, handler: (event: any) => void): this {
           if (event === 'error') {
@@ -468,10 +471,12 @@ import {
               this.securityManager.on(event, handler);
           } else {
               this.logger.warn(`Subscribing to non-'error' or non-'security:' events directly on the client is not standard. Event: '${event}'`);
+              // Allow subscribing to other events emitted by clientEventEmitter if needed
+              // this.clientEventEmitter.on(event, handler);
           }
           return this;
       }
-  
+
       public off(event: string, handler: (event: any) => void): this {
           if (event === 'error') {
               this.clientEventEmitter.off(event, handler as (error: OpenRouterError) => void);
@@ -481,10 +486,12 @@ import {
               this.securityManager.off(event, handler);
           } else {
               this.logger.warn(`Cannot unsubscribe from non-'error' or non-'security:' event '${event}' via client.`);
+              // Allow unsubscribing from other events emitted by clientEventEmitter if needed
+              // this.clientEventEmitter.off(event, handler);
           }
           return this;
       }
-  
+
       public async destroy(): Promise<void> {
           this.logger.log('Destroying OpenRouterClient and components...');
           await this.unifiedHistoryManager?.destroy?.();
@@ -495,19 +502,19 @@ import {
           this.logger.debug('Client event listeners removed.');
           this.logger.log('OpenRouterClient successfully destroyed.');
       }
-  
+
       // --- Plugin and Middleware Management ---
-  
+
       public async use(plugin: OpenRouterPlugin): Promise<void> {
           await this.pluginManager.registerPlugin(plugin, this);
       }
-  
+
       public useMiddleware(fn: MiddlewareFunction): void {
           this.pluginManager.registerMiddleware(fn);
       }
-  
+
       // --- Internal setters for plugins ---
-  
+
       /** @internal */
       public setSecurityManager(securityManager: SecurityManager | null): void {
           this.securityManager?.destroy?.();
@@ -518,7 +525,7 @@ import {
                this.chatProcessor['securityManager'] = securityManager;
           }
       }
-  
+
       /** @internal */
       public setCostTracker(costTracker: CostTracker | null): void {
           this.costTracker?.destroy?.();
@@ -528,29 +535,31 @@ import {
                 this.chatProcessor['costTracker'] = costTracker;
            }
       }
-  
+
       // --- Deprecated Methods ---
-  
+
       /** @deprecated Tool processing is now integrated into client.chat(). Use the main chat method instead. */
       public async handleToolCalls(params: {
           message: Message & { tool_calls?: ToolCall[] };
-          messages: Message[];
+          messages: Message[]; // This parameter seems unused in the original logic
           tools?: Tool[];
-          debug?: boolean;
+          debug?: boolean; // This is now controlled by client config
           accessToken?: string;
+          // Cannot easily add includeToolResultInReport here without breaking signature further
         }): Promise<Message[]> {
           this.logger.warn("Method client.handleToolCalls() is deprecated and will be removed. Tool processing is integrated into client.chat().");
           const { message, tools = [], accessToken } = params;
           if (!message?.tool_calls?.length) return [];
           if (!Array.isArray(tools) || tools.length === 0) throw new ToolError("Tool processing failed: No tools defined.");
-  
+
           let userInfo: UserAuthInfo | null = null;
            if (this.securityManager && accessToken) {
                try { userInfo = await this.securityManager.authenticateUser(accessToken); } catch (e) { /* ignore */ }
            }
+           // Call the internal handler, which now returns ToolCallOutcome[]
            const outcomes = await ToolHandler.handleToolCalls({
                message: message as Message & { tool_calls: ToolCall[] },
-               debug: this.isDebugMode(),
+               debug: this.isDebugMode(), // Use client's debug state
                tools: tools,
                securityManager: this.securityManager || undefined,
                userInfo: userInfo,
@@ -558,6 +567,7 @@ import {
                parallelCalls: true,
                includeToolResultInReport: false
            });
+           // Return only the messages for backward compatibility
            return outcomes.map(o => o.message);
       }
   }
