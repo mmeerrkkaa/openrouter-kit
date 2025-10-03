@@ -1,6 +1,6 @@
 {
   "name": "openrouter-kit",
-  "version": "0.1.65",
+  "version": "0.1.70",
   "description": "TypeScript/JavaScript client for OpenRouter API with history management and tool calls support",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
