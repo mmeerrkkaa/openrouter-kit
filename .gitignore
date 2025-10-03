@@ -39,3 +39,5 @@ logs/
 .eslintcache
 
 .node_repl_history 
+
+x.js
