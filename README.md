@@ -32,7 +32,7 @@ import { OpenRouterClient } from 'openrouter-kit';
 // Initialize the client with your API key
 const client = new OpenRouterClient({
   apiKey: process.env.OPENROUTER_API_KEY || 'sk-or-v1-...',
-  model: "google/gemini-2.5-flash-preview" // Default model for all calls
+  model: "x-ai/grok-4-fast" // Default model for all calls
 });
 
 async function main() {
@@ -71,7 +71,7 @@ const client = new OpenRouterClient({
   // Use MemoryHistoryStorage to store history in memory
   historyAdapter: new MemoryHistoryStorage(),
   enableCostTracking: true, // Enable cost calculation (saved in metadata)
-  model: "google/gemini-2.5-flash-preview",
+  model: "x-ai/grok-4-fast",
   debug: false,
 });
 
@@ -160,7 +160,7 @@ const userTools = [
 
 const client = new OpenRouterClient({
   apiKey: process.env.OPENROUTER_API_KEY || "sk-or-v1-...",
-  model: "google/gemini-2.5-flash-preview", // Model that supports tools
+  model: "x-ai/grok-4-fast", // Model that supports tools
 });
 
 async function main() {
@@ -336,6 +336,82 @@ async function main() {
 main();
 ```
 
+### 6. Streaming Response (Real-time Output)
+
+Stream responses in real-time for a better user experience with long-form content generation.
+
+```javascript
+// streaming-example.js
+const { OpenRouterClient } = require('openrouter-kit');
+
+const client = new OpenRouterClient({
+  apiKey: process.env.OPENROUTER_API_KEY || 'sk-or-v1-...',
+  model: 'x-ai/grok-4-fast',
+  enableCostTracking: true, // Track costs even in streaming mode
+});
+
+async function main() {
+  try {
+    console.log('Streaming response:\n');
+
+    const result = await client.chatStream({
+      prompt: 'Write a haiku about coding',
+      streamCallbacks: {
+        onContent: (content) => {
+          // Print each chunk as it arrives
+          process.stdout.write(content);
+        },
+        onComplete: (fullContent, usage) => {
+          console.log('\n\n--- Stream Complete ---');
+          console.log('Total tokens:', usage?.total_tokens);
+        },
+        onError: (error) => {
+          console.error('Stream error:', error.message);
+        }
+      }
+    });
+
+    // Result includes full content, usage, cost, and duration
+    console.log('Cost:', result.cost ? `$${result.cost.toFixed(6)}` : 'N/A');
+    console.log('Duration:', `${result.durationMs}ms`);
+
+  } catch (error) {
+    console.error('Error:', error.message);
+  } finally {
+    await client.destroy();
+  }
+}
+
+main();
+```
+
+**Tool Execution in Streaming:**
+
+```javascript
+// Tools execute automatically when provided (just like client.chat())
+const result = await client.chatStream({
+  prompt: "What's the weather in Paris?",
+  tools: myTools, // 🔥 If tools provided, they execute automatically!
+  streamCallbacks: {
+    onContent: (content) => console.log(content),
+    onToolCallExecuting: (name, args) => console.log(`Calling ${name}...`),
+    onToolCallResult: (name, result) => console.log(`Got: ${result}`)
+  }
+});
+```
+
+**Streaming Features:**
+- ✅ Real-time content delivery via callbacks
+- ✅ Automatic cost tracking and metrics
+- ✅ **Automatic tool execution** (when tools provided)
+- ✅ AbortSignal support for cancellation
+- ✅ Full authentication and security checks
+- ✅ History management with streaming responses
+
+**Examples:**
+- [`examples/streaming-demo.js`](./examples/streaming-demo.js) - Comprehensive streaming examples
+- [`examples/streaming-test.js`](./examples/streaming-test.js) - Test suite for streaming features
+
 ---
 
 ## 📚 Detailed Guide
@@ -380,6 +456,7 @@ Now that you've seen the basic examples, you can delve deeper into the library's
 ### 🚀 Key Features
 
 *   **🤖 Universal Chat:** Simple and powerful API (`client.chat`) for interacting with any model available via OpenRouter.
+*   **🌊 Streaming Support:** Real-time response streaming with `client.chatStream()` for better UX. Includes callbacks, cost tracking, and full security checks.
 *   **📜 History Management with Metadata:** **Requires `historyAdapter` configuration.** Automatic loading and saving of dialog history for each user (`user`), including **API call metadata** (model, tokens, cost, etc.).
     *   Flexible history system based on **adapters** (`IHistoryStorage`).
     *   Includes: `MemoryHistoryStorage`, `DiskHistoryStorage`.
@@ -432,7 +509,7 @@ const readline = require('readline').createInterface({
 
 const client = new OpenRouterClient({
   apiKey: process.env.OPENROUTER_API_KEY || "sk-or-v1-...",
-  model: "google/gemini-2.5-flash-preview",
+  model: "x-ai/grok-4-fast",
   historyAdapter: new MemoryHistoryStorage(), // Required for history
   enableCostTracking: true,
   debug: false,
@@ -581,7 +658,7 @@ When creating the client (`new OpenRouterClient(config)`), a configuration objec
 *   `apiKey` (string, **required**): Your OpenRouter API key.
 *   `apiEndpoint?` (string): URL endpoint for chat completions.
 *   `apiBaseUrl?` (string): Base URL for auxiliary endpoints (e.g., `/models`, `/auth/key`). Defaults to `https://openrouter.ai/api/v1`.
-*   `model?` (string): Default model for requests (e.g., `"google/gemini-2.5-flash-preview"`).
+*   `model?` (string): Default model for requests (e.g., `"x-ai/grok-4-fast"`).
 *   `debug?` (boolean): Enable detailed logging (default: `false`).
 *   `proxy?` (string | object | null): HTTP/HTTPS proxy settings.
 *   `referer?` (string): Value for the `HTTP-Referer` header.
@@ -604,6 +681,7 @@ When creating the client (`new OpenRouterClient(config)`), a configuration objec
 ##### Core Methods
 
 *   `chat(options: OpenRouterRequestOptions): Promise<ChatCompletionResult>`: The main method for sending chat requests.
+*   `chatStream(options: OpenRouterRequestOptions, abortSignal?: AbortSignal): Promise<ChatStreamResult>`: **(New)** Stream responses in real-time with callbacks. Returns result with cost, duration, and optional tool calls.
 *   `getHistoryManager(): UnifiedHistoryManager`: Returns the history manager.
 *   `getHistoryAnalyzer(): HistoryAnalyzer`: **(New)** Returns the history analyzer.
 *   `getSecurityManager(): SecurityManager | null`: Returns the security manager.
@@ -642,6 +720,13 @@ These options are passed to the `client.chat()` method to configure a specific r
 *   `reasoning?` (ReasoningConfig): Settings for requesting reasoning tokens (`effort`, `max_tokens`, `exclude`).
 *   `transforms?` (string[]): OpenRouter transforms (e.g., `["middle-out"]`).
 *   `route?`: Deprecated OpenRouter routing parameter.
+*   `streamCallbacks?` (StreamCallbacks): **(For `chatStream` only)** Callbacks for handling streaming events:
+    *   `onChunk?: (chunk: StreamChunk) => void`: Called for each SSE chunk received.
+    *   `onContent?: (content: string) => void`: Called when new content arrives.
+    *   `onToolCallExecuting?: (toolName: string, args: any) => void`: Called when a tool starts executing (tools auto-execute when provided).
+    *   `onToolCallResult?: (toolName: string, result: any) => void`: Called when a tool finishes executing.
+    *   `onComplete?: (fullContent: string, usage?: UsageInfo, toolCalls?: ToolCall[]) => void`: Called when streaming completes.
+    *   `onError?: (error: Error) => void`: Called on stream errors.
 
 ##### `client.chat` Result (`ChatCompletionResult`)
 
@@ -658,6 +743,19 @@ The `client.chat()` method returns a `Promise` that resolves to a `ChatCompletio
 *   `cost?` (number | null): Calculated approximate cost of the request (if `enableCostTracking: true`).
 *   `reasoning?` (string | null): String containing the model's reasoning steps (if requested and returned).
 *   `annotations?` (UrlCitationAnnotation[]): Array of annotations (e.g., web search citations) related to the final response.
+
+**`ChatStreamResult`** (returned by `client.chatStream()`):
+
+*   `content` (string): The complete streamed content.
+*   `usage?` (UsageInfo | null): Token usage statistics.
+*   `model?` (string): Model that generated the response.
+*   `finishReason?` (string | null): Reason streaming stopped.
+*   `id?` (string): OpenRouter response ID.
+*   `toolCalls?` (ToolCall[]): Tool calls detected during streaming (not auto-executed).
+*   `reasoning?` (string): Reasoning tokens if requested.
+*   `annotations?` (UrlCitationAnnotation[]): Web search citations.
+*   `cost?` (number | null): Calculated cost (if cost tracking enabled).
+*   `durationMs?` (number): Total streaming duration in milliseconds.
 
 #### 🧩 Plugins and Middleware
 
