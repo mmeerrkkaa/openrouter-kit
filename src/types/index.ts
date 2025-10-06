@@ -353,6 +353,10 @@ export interface OpenRouterRequestOptions {
   models?: string[];
   plugins?: PluginConfig[];
   reasoning?: ReasoningConfig;
+
+  // Streaming
+  stream?: boolean;
+  streamCallbacks?: StreamCallbacks;
 }
 
 // --- API Response Structures ---
@@ -409,4 +413,55 @@ export interface ApiKeyInfo {
             interval: string;
         };
     };
+}
+
+// --- Streaming Types ---
+
+export interface StreamChunk {
+    id: string;
+    object: string;
+    created: number;
+    model: string;
+    choices: Array<{
+        index: number;
+        delta: {
+            role?: Role;
+            content?: string | null;
+            tool_calls?: Array<{
+                index?: number;
+                id?: string;
+                type?: 'function';
+                function?: {
+                    name?: string;
+                    arguments?: string;
+                };
+            }>;
+            reasoning?: string | null;
+        };
+        finish_reason?: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
+        logprobs?: any | null;
+    }>;
+    usage?: UsageInfo;
+}
+
+export interface StreamCallbacks {
+    onChunk?: (chunk: StreamChunk) => void;
+    onContent?: (content: string) => void;
+    onToolCallExecuting?: (toolName: string, args: any) => void;
+    onToolCallResult?: (toolName: string, result: any) => void;
+    onComplete?: (fullContent: string, usage?: UsageInfo, toolCalls?: ToolCall[]) => void;
+    onError?: (error: Error) => void;
+}
+
+export interface ChatStreamResult {
+    content: string;
+    usage?: UsageInfo | null;
+    model?: string;
+    finishReason?: string | null;
+    id?: string;
+    toolCalls?: ToolCall[];
+    reasoning?: string;
+    annotations?: UrlCitationAnnotation[];
+    cost?: number | null;
+    durationMs?: number;
 }

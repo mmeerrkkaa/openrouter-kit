@@ -15,6 +15,9 @@ import {
     ModelPricingInfo,
     UsageInfo,
     OpenRouterRequestOptions,
+    StreamChunk,
+    StreamCallbacks,
+    ChatStreamResult,
 } from '../types';
 import { Logger } from '../utils/logger';
 import { mapError, APIError, ConfigError, TimeoutError, NetworkError } from '../utils/error';
@@ -301,6 +304,240 @@ export class ApiHandler {
         } catch (error) {
             const mappedError = mapError(error);
             this.logger.error(`Error fetching models: ${mappedError.message}`, mappedError.details);
+            throw mappedError;
+        }
+    }
+
+    public async sendStreamingChatRequest(
+        requestBody: Record<string, any>,
+        callbacks?: StreamCallbacks,
+        abortSignal?: AbortSignal
+    ): Promise<ChatStreamResult> {
+        this.logger.debug(`Sending streaming request to API... Model(s): ${requestBody.models ? requestBody.models.join(', ') : requestBody.model}`);
+
+        const streamRequestBody = { ...requestBody, stream: true };
+
+        if (this.debug) {
+            this.logger.debug('Streaming Request Body:', streamRequestBody);
+        }
+
+        let fullContent = '';
+        let fullReasoning = '';
+        let usage: UsageInfo | undefined;
+        let model: string | undefined;
+        let finishReason: string | null = null;
+        let id: string | undefined;
+        let annotations: any[] = [];
+
+        // Accumulate tool calls from streaming chunks
+        const toolCallsMap = new Map<number, { id?: string; type?: 'function'; function?: { name?: string; arguments: string } }>();
+
+        try {
+            const response = await this.axiosInstance.post<ReadableStream>('', streamRequestBody, {
+                responseType: 'stream',
+                signal: abortSignal,
+            });
+
+            const stream = response.data as any; // In Node.js, this is an IncomingMessage (readable stream)
+
+            return new Promise<ChatStreamResult>((resolve, reject) => {
+                let buffer = '';
+                let completedOnce = false; // Prevent double completion
+
+                const cleanup = () => {
+                    try {
+                        if (stream && typeof stream.destroy === 'function') {
+                            stream.destroy();
+                        }
+                        stream?.removeAllListeners?.();
+                    } catch (cleanupError) {
+                        this.logger.debug('Error during stream cleanup:', cleanupError);
+                    }
+                };
+
+                // Handle abort signal
+                if (abortSignal) {
+                    abortSignal.addEventListener('abort', () => {
+                        if (!completedOnce) {
+                            completedOnce = true;
+                            cleanup();
+                            const abortError = new Error('Stream aborted by user');
+                            (abortError as any).code = 'ERR_CANCELED';
+                            reject(mapError(abortError));
+                        }
+                    });
+                }
+
+                stream.on('data', (chunk: Buffer) => {
+                    const text = chunk.toString();
+                    buffer += text;
+
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';
+
+                    for (const line of lines) {
+                        if (line.trim() === '' || line.startsWith(':')) {
+                            continue; // Skip empty lines and comments
+                        }
+
+                        if (line.startsWith('data: ')) {
+                            const data = line.slice(6).trim();
+
+                            if (data === '[DONE]') {
+                                if (completedOnce) return;
+                                completedOnce = true;
+                                cleanup();
+
+                                // Build final tool_calls array
+                                const toolCalls = Array.from(toolCallsMap.values())
+                                    .filter(tc => tc.id && tc.function?.name)
+                                    .map(tc => ({
+                                        id: tc.id!,
+                                        type: 'function' as const,
+                                        function: {
+                                            name: tc.function!.name!,
+                                            arguments: tc.function!.arguments || '{}'
+                                        }
+                                    }));
+
+                                const finalToolCalls = toolCalls.length > 0 ? toolCalls : undefined;
+
+                                callbacks?.onComplete?.(fullContent, usage, finalToolCalls);
+
+                                resolve({
+                                    content: fullContent,
+                                    usage,
+                                    model,
+                                    finishReason,
+                                    id,
+                                    toolCalls: finalToolCalls,
+                                    reasoning: fullReasoning || undefined,
+                                    annotations: annotations.length > 0 ? annotations : undefined
+                                });
+                                return;
+                            }
+
+                            try {
+                                const chunk: StreamChunk = JSON.parse(data);
+
+                                if (chunk.id) id = chunk.id;
+                                if (chunk.model) model = chunk.model;
+                                if (chunk.usage) usage = chunk.usage;
+
+                                callbacks?.onChunk?.(chunk);
+
+                                const choice = chunk.choices?.[0];
+                                if (choice) {
+                                    if (choice.finish_reason) {
+                                        finishReason = choice.finish_reason;
+                                    }
+
+                                    const delta = choice.delta;
+
+                                    // Accumulate content
+                                    if (delta?.content) {
+                                        fullContent += delta.content;
+                                        callbacks?.onContent?.(delta.content);
+                                    }
+
+                                    // Accumulate reasoning
+                                    if (delta?.reasoning) {
+                                        fullReasoning += delta.reasoning;
+                                    }
+
+                                    // Accumulate tool calls
+                                    if (delta?.tool_calls) {
+                                        for (const deltaToolCall of delta.tool_calls) {
+                                            const index = deltaToolCall.index ?? 0;
+
+                                            if (!toolCallsMap.has(index)) {
+                                                toolCallsMap.set(index, { function: { arguments: '' } });
+                                            }
+
+                                            const accumulated = toolCallsMap.get(index)!;
+
+                                            if (deltaToolCall.id) {
+                                                accumulated.id = deltaToolCall.id;
+                                            }
+                                            if (deltaToolCall.type) {
+                                                accumulated.type = deltaToolCall.type;
+                                            }
+                                            if (deltaToolCall.function) {
+                                                if (!accumulated.function) {
+                                                    accumulated.function = { arguments: '' };
+                                                }
+                                                if (deltaToolCall.function.name) {
+                                                    accumulated.function.name = deltaToolCall.function.name;
+                                                }
+                                                if (deltaToolCall.function.arguments) {
+                                                    accumulated.function.arguments += deltaToolCall.function.arguments;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Accumulate annotations (typically come in the final message)
+                                if (chunk.choices?.[0]?.delta && 'annotations' in chunk.choices[0].delta) {
+                                    const deltaAnnotations = (chunk.choices[0].delta as any).annotations;
+                                    if (Array.isArray(deltaAnnotations)) {
+                                        annotations.push(...deltaAnnotations);
+                                    }
+                                }
+                            } catch (parseError) {
+                                this.logger.warn('Failed to parse streaming chunk:', data, parseError);
+                            }
+                        }
+                    }
+                });
+
+                stream.on('end', () => {
+                    if (completedOnce) return;
+                    completedOnce = true;
+                    cleanup();
+
+                    // Build final tool_calls array
+                    const toolCalls = Array.from(toolCallsMap.values())
+                        .filter(tc => tc.id && tc.function?.name)
+                        .map(tc => ({
+                            id: tc.id!,
+                            type: 'function' as const,
+                            function: {
+                                name: tc.function!.name!,
+                                arguments: tc.function!.arguments || '{}'
+                            }
+                        }));
+
+                    const finalToolCalls = toolCalls.length > 0 ? toolCalls : undefined;
+
+                    callbacks?.onComplete?.(fullContent, usage, finalToolCalls);
+
+                    resolve({
+                        content: fullContent,
+                        usage,
+                        model,
+                        finishReason,
+                        id,
+                        toolCalls: finalToolCalls,
+                        reasoning: fullReasoning || undefined,
+                        annotations: annotations.length > 0 ? annotations : undefined
+                    });
+                });
+
+                stream.on('error', (error: Error) => {
+                    if (completedOnce) return;
+                    completedOnce = true;
+                    cleanup();
+
+                    const mappedError = mapError(error);
+                    this.logger.error('Streaming error:', mappedError.message, mappedError.details);
+                    callbacks?.onError?.(mappedError);
+                    reject(mappedError);
+                });
+            });
+        } catch (error) {
+            const mappedError = mapError(error);
+            callbacks?.onError?.(mappedError);
             throw mappedError;
         }
     }

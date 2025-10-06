@@ -9,6 +9,9 @@ export * as config from './config';
 // --- Core Types ---
 export * from './types';
 
+// --- Streaming Types (explicit export for better visibility) ---
+export type { StreamChunk, StreamCallbacks, ChatStreamResult } from './types';
+
 // --- Error Handling ---
 export * from './utils/error';
 

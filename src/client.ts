@@ -17,7 +17,9 @@ import {
     ApiCallMetadata,
     ToolCall,
     ToolCallDetail,
-    ToolCallOutcome
+    ToolCallOutcome,
+    StreamCallbacks,
+    ChatStreamResult
   } from './types';
   import { ToolHandler } from './tool-handler';
   import { formatDateTime } from './utils/formatting';
@@ -501,6 +503,260 @@ import {
           this.clientEventEmitter.removeAllListeners();
           this.logger.debug('Client event listeners removed.');
           this.logger.log('OpenRouterClient successfully destroyed.');
+      }
+
+      // --- Streaming Chat ---
+
+      public async chatStream(
+          options: OpenRouterRequestOptions & { streamCallbacks?: StreamCallbacks },
+          abortSignal?: AbortSignal
+      ): Promise<ChatStreamResult> {
+          const chatStartTime = Date.now();
+          const logIdentifier = options.prompt
+              ? `prompt: "${options.prompt.substring(0, 50)}..."`
+              : `customMessages: ${options.customMessages?.length ?? 0}`;
+          this.logger.log(`Processing streaming chat request (${logIdentifier})...`);
+
+          if (!options.customMessages && !options.prompt) {
+              throw new ConfigError("'prompt' or 'customMessages' must be provided in options");
+          }
+
+          try {
+
+          // 1. Authentication / Authorization
+          let userInfo: UserAuthInfo | null = null;
+          if (this.securityManager) {
+              const accessToken = options.accessToken;
+              const secConfig = this.securityManager.getConfig();
+              if (accessToken) {
+                  userInfo = await this.securityManager.authenticateUser(accessToken);
+                  if (!userInfo && secConfig.requireAuthentication) {
+                      throw new AuthenticationError('Authentication failed (token invalid/missing) but is required.', 401);
+                  }
+                  this.logger.debug(`Streaming authentication complete. User: ${userInfo?.userId || 'anonymous/failed'}`);
+              } else if (secConfig.requireAuthentication) {
+                  throw new AuthorizationError('Access token is required but was not provided.', 401);
+              }
+
+              // NOTE: In streaming mode, tool calls are NOT auto-executed, so detailed
+              // security checks (rate limiting, tool access control, argument sanitization)
+              // are deferred. If users want automatic tool execution with full security,
+              // they should use the regular client.chat() method instead.
+              this.logger.debug('Streaming mode: Tool security checks deferred (tools not auto-executed).');
+          } else if (options.accessToken) {
+               this.logger.warn('accessToken provided, but SecurityManager not configured.');
+           }
+
+          // 2. Load History
+          let initialHistoryEntries: HistoryEntry[] = [];
+          const user = options.user;
+          const group = options.group;
+          if (user && !options.customMessages) {
+              const historyKey = this._getHistoryKey(user, group);
+              try {
+                  initialHistoryEntries = await this.unifiedHistoryManager.getHistoryEntries(historyKey);
+                  this.logger.debug(`Loaded ${initialHistoryEntries.length} history entries for key '${historyKey}'.`);
+              } catch (histError) {
+                  this.logger.error(`Error loading history entries for key '${historyKey}':`, mapError(histError));
+              }
+          }
+
+          // 3. Prepare Initial Messages for API
+          const initialMessages = await prepareMessagesForApi(
+              {
+                  user: options.user,
+                  group: options.group,
+                  prompt: options.prompt || '',
+                  systemPrompt: options.systemPrompt,
+                  customMessages: options.customMessages,
+                  _loadedHistoryEntries: initialHistoryEntries,
+                  getHistoryKeyFn: this._getHistoryKey.bind(this)
+              },
+              this.unifiedHistoryManager,
+              this.logger
+          );
+
+          // 4. Build request body
+          const requestBody = this.apiHandler.buildChatRequestBody({
+              model: options.model || this.currentModel,
+              messages: initialMessages,
+              tools: options.tools,
+              responseFormat: options.responseFormat,
+              temperature: options.temperature,
+              maxTokens: options.maxTokens,
+              topP: options.topP,
+              presencePenalty: options.presencePenalty,
+              frequencyPenalty: options.frequencyPenalty,
+              stop: options.stop,
+              logitBias: options.logitBias,
+              seed: options.seed,
+              toolChoice: options.toolChoice,
+              parallelToolCalls: options.parallelToolCalls,
+              route: options.route,
+              transforms: options.transforms,
+              provider: options.provider,
+              models: options.models,
+              plugins: options.plugins,
+              reasoning: options.reasoning,
+              filterMessagesForApi: filterHistoryForApi
+          });
+
+          // 5. Send streaming request
+          let result = await this.apiHandler.sendStreamingChatRequest(
+              requestBody,
+              options.streamCallbacks,
+              abortSignal
+          );
+
+          // 5.1. Auto-execute tools if tool calls detected (just like client.chat())
+          if (options.tools && result.toolCalls && result.toolCalls.length > 0 && result.finishReason === 'tool_calls') {
+              this.logger.log(`Executing ${result.toolCalls.length} tool(s) in streaming mode...`);
+
+              const conversationMessages: Message[] = [
+                  ...initialMessages,
+                  {
+                      role: 'assistant',
+                      content: result.content || null,
+                      tool_calls: result.toolCalls,
+                      timestamp: formatDateTime()
+                  }
+              ];
+
+              // Execute tools and collect results
+              for (const toolCall of result.toolCalls) {
+                  const tool = options.tools?.find(t => (t.function?.name || t.name) === toolCall.function.name);
+
+                  if (!tool) {
+                      this.logger.warn(`Tool '${toolCall.function.name}' not found in provided tools list`);
+                      continue;
+                  }
+
+                  try {
+                      options.streamCallbacks?.onToolCallExecuting?.(toolCall.function.name, JSON.parse(toolCall.function.arguments));
+
+                      // Execute tool (with security checks via toolHandler if available)
+                      const toolContext = { userInfo: userInfo || undefined };
+                      let toolResult: any;
+
+                      if (this.securityManager && userInfo) {
+                          // Full security check
+                          await this.securityManager.checkToolAccessAndArgs(tool, userInfo, JSON.parse(toolCall.function.arguments));
+                      }
+
+                      toolResult = await tool.execute(JSON.parse(toolCall.function.arguments), toolContext);
+                      options.streamCallbacks?.onToolCallResult?.(toolCall.function.name, toolResult);
+
+                      // Add tool result to conversation
+                      conversationMessages.push({
+                          role: 'tool',
+                          tool_call_id: toolCall.id,
+                          content: typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult),
+                          timestamp: formatDateTime()
+                      });
+                  } catch (toolError: any) {
+                      this.logger.error(`Error executing tool '${toolCall.function.name}':`, toolError);
+                      conversationMessages.push({
+                          role: 'tool',
+                          tool_call_id: toolCall.id,
+                          content: JSON.stringify({ error: toolError.message || 'Tool execution failed' }),
+                          timestamp: formatDateTime()
+                      });
+                  }
+              }
+
+              // Continue streaming with tool results
+              const followUpBody = this.apiHandler.buildChatRequestBody({
+                  model: options.model || this.currentModel,
+                  messages: conversationMessages,
+                  tools: options.tools,
+                  responseFormat: options.responseFormat,
+                  temperature: options.temperature,
+                  maxTokens: options.maxTokens,
+                  topP: options.topP,
+                  presencePenalty: options.presencePenalty,
+                  frequencyPenalty: options.frequencyPenalty,
+                  stop: options.stop,
+                  logitBias: options.logitBias,
+                  seed: options.seed,
+                  toolChoice: options.toolChoice,
+                  parallelToolCalls: options.parallelToolCalls,
+                  route: options.route,
+                  transforms: options.transforms,
+                  provider: options.provider,
+                  models: options.models,
+                  plugins: options.plugins,
+                  reasoning: options.reasoning,
+                  filterMessagesForApi: filterHistoryForApi
+              });
+
+              // Stream final response
+              result = await this.apiHandler.sendStreamingChatRequest(
+                  followUpBody,
+                  options.streamCallbacks,
+                  abortSignal
+              );
+          }
+
+          // 6. Calculate cost if cost tracker is enabled
+          let calculatedCost: number | null = null;
+          if (this.costTracker && result.usage) {
+              const modelUsed = result.model || options.model || this.currentModel;
+              calculatedCost = this.costTracker.calculateCost(modelUsed, result.usage);
+              this.logger.debug(`Calculated streaming cost: $${calculatedCost} for model ${modelUsed}`);
+          }
+
+          // 7. Save to history if user is provided
+          if (user && options.prompt) {
+              const historyKey = this._getHistoryKey(user, group);
+              try {
+                  const userMessage: Message = {
+                      role: 'user',
+                      content: options.prompt,
+                      timestamp: formatDateTime()
+                  };
+                  const assistantMessage: Message = {
+                      role: 'assistant',
+                      content: result.content || null,
+                      timestamp: formatDateTime(),
+                      ...(result.toolCalls && result.toolCalls.length > 0 && { tool_calls: result.toolCalls }),
+                      ...(result.reasoning && { reasoning: result.reasoning }),
+                      ...(result.annotations && result.annotations.length > 0 && { annotations: result.annotations })
+                  };
+                  const metadata: ApiCallMetadata = {
+                      callId: result.id || `stream-${Date.now()}`,
+                      modelUsed: result.model || options.model || this.currentModel,
+                      usage: result.usage || null,
+                      cost: calculatedCost,
+                      timestamp: Date.now(),
+                      finishReason: result.finishReason || null
+                  };
+
+                  await this.unifiedHistoryManager.addHistoryEntries(historyKey, [
+                      { message: userMessage, apiCallMetadata: null },
+                      { message: assistantMessage, apiCallMetadata: metadata }
+                  ]);
+                  this.logger.debug(`Saved streaming chat to history for key '${historyKey}'.`);
+              } catch (histError) {
+                  this.logger.error(`Error saving streaming chat to history:`, mapError(histError));
+              }
+          }
+
+          const duration = Date.now() - chatStartTime;
+          this.logger.log(`Streaming chat request (${logIdentifier}) completed in ${duration}ms.`);
+
+          // Return result with cost
+          return {
+              ...result,
+              cost: calculatedCost,
+              durationMs: duration
+          };
+
+          } catch (error) {
+              const mappedError = mapError(error);
+              this.logger.error(`Error during streaming chat (${logIdentifier}): ${mappedError.message}`, mappedError.details || mappedError);
+              this._handleError(mappedError);
+              throw mappedError;
+          }
       }
 
       // --- Plugin and Middleware Management ---
